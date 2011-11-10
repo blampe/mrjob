@@ -11,7 +11,6 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
 """Test the runner base class MRJobRunner"""
 
 from __future__ import with_statement
@@ -27,7 +26,6 @@ import tarfile
 from testify import TestCase
 from testify import assert_equal
 from testify import assert_in
-from testify import assert_not_equal
 from testify import assert_gte
 from testify import assert_lte
 from testify import assert_not_in
@@ -39,7 +37,6 @@ import tempfile
 from mrjob.conf import dump_mrjob_conf
 from mrjob.local import LocalMRJobRunner
 from mrjob.parse import JOB_NAME_RE
-from mrjob.runner import MRJobRunner
 from mrjob.runner import CLEANUP_DEFAULT
 from mrjob.util import log_to_stream
 from tests.mr_two_step_job import MRTwoStepJob
@@ -85,9 +82,12 @@ class WithStatementTestCase(TestCase):
 
     def test_cleanup_error(self):
         assert_raises(ValueError, self._test_cleanup_after_with_statement,
-                      ['NONE,ALL'], True)
+                      ['NONE','ALL'], True)
         assert_raises(ValueError, self._test_cleanup_after_with_statement,
                       ['GARBAGE'], True)
+
+    def test_double_none_okay(self):
+        self._test_cleanup_after_with_statement(['NONE','NONE'], True)
 
     def test_cleanup_deprecated(self):
         stderr = StringIO()
@@ -102,7 +102,8 @@ class WithStatementTestCase(TestCase):
             assert_in('deprecated', stderr.getvalue())
 
     def test_cleanup_not_supported(self):
-        assert_raises(ValueError, LocalMRJobRunner, cleanup_on_failure=CLEANUP_DEFAULT)
+        assert_raises(ValueError,
+                      LocalMRJobRunner, cleanup_on_failure=CLEANUP_DEFAULT)
 
 
 class TestExtraKwargs(TestCase):
@@ -250,7 +251,8 @@ class TestHadoopConfArgs(TestCase):
 
     def test_hadoop_extra_args(self):
         extra_args = ['-foo', 'bar']
-        runner = LocalMRJobRunner(conf_path=False, hadoop_extra_args=extra_args)
+        runner = LocalMRJobRunner(conf_path=False,
+                                  hadoop_extra_args=extra_args)
         assert_equal(runner._hadoop_conf_args(0, 1), extra_args)
 
     def test_cmdenv(self):
@@ -259,7 +261,8 @@ class TestHadoopConfArgs(TestCase):
         assert_equal(runner._hadoop_conf_args(0, 1),
                      ['-cmdenv', 'BAX=Arnold',
                       '-cmdenv', 'BAZ=qux',
-                      '-cmdenv', 'FOO=bar',])
+                      '-cmdenv', 'FOO=bar',
+                      ])
 
     def test_hadoop_input_format(self):
         format = 'org.apache.hadoop.mapred.SequenceFileInputFormat'
@@ -287,26 +290,37 @@ class TestHadoopConfArgs(TestCase):
         assert_equal(runner._hadoop_conf_args(0, 1),
                      ['-D', 'BAX=Arnold',
                       '-D', 'BAZ=qux',
-                      '-D', 'FOO=bar',])
+                      '-D', 'FOO=bar',
+                      ])
         runner = LocalMRJobRunner(conf_path=False, jobconf=jobconf,
                                   hadoop_version='0.18')
         assert_equal(runner._hadoop_conf_args(0, 1),
                      ['-jobconf', 'BAX=Arnold',
                       '-jobconf', 'BAZ=qux',
-                      '-jobconf', 'FOO=bar',])
+                      '-jobconf', 'FOO=bar',
+                      ])
+
+    def test_partitioner(self):
+        partitioner = 'org.apache.hadoop.mapreduce.Partitioner'
+
+        runner = LocalMRJobRunner(conf_path=False, partitioner=partitioner)
+        assert_equal(runner._hadoop_conf_args(0, 1),
+                     ['-partitioner', partitioner])
 
     def test_hadoop_extra_args_comes_first(self):
         runner = LocalMRJobRunner(
-            conf_path=False,
             cmdenv={'FOO': 'bar'},
+            conf_path=False,
+            hadoop_extra_args=['-libjar', 'qux.jar'],
             hadoop_input_format='FooInputFormat',
             hadoop_output_format='BarOutputFormat',
             jobconf={'baz': 'quz'},
-            hadoop_extra_args=['-libjar', 'qux.jar'])
+            partitioner='java.lang.Object',
+        )
         # hadoop_extra_args should come first
         conf_args = runner._hadoop_conf_args(0, 1)
         assert_equal(conf_args[:2], ['-libjar', 'qux.jar'])
-        assert_equal(len(conf_args), 10)
+        assert_equal(len(conf_args), 12)
 
 
 class TestCat(TestCase):
@@ -355,4 +369,3 @@ class TestCat(TestCase):
                 output.append(line)
 
         assert_equal(output, ['bar\n', 'bar\n', 'foo\n'])
-

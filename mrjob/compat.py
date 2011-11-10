@@ -451,48 +451,55 @@ def _dict_list_to_compat_map(dict_list):
     return compat_map
 
 
-jobconf_map = _dict_list_to_compat_map(JOBCONF_DICT_LIST)
+_jobconf_map = _dict_list_to_compat_map(JOBCONF_DICT_LIST)
 
 
-def _jobconf_to_env_var(variable):
-    return variable.replace('.', '_')
+def get_jobconf_value(variable, default=None):
+    """Get the value of a jobconf variable from the runtime environment.
 
+    For example, a :py:class:`~mrjob.job.MRJob` could use
+    ``get_jobconf_value('map.input.file')`` to get the name of the file a
+    mapper is reading input from.
 
-def _env_var_to_jobconf(variable):
-    return variable.replace('_', '.')
+    If the name of the jobconf variable is different in different versions of
+    Hadoop (e.g. in Hadoop 0.21, `map.input.file` is
+    `mapreduce.map.input.file`), we'll automatically try all variants before
+    giving up.
 
-
-def get_jobconf_value(variable):
-    """gets a jobconf variable from runtime environment
+    Return *default* if that jobconf variable isn't set.
     """
+    # try variable verbatim first
     name = variable.replace('.', '_')
     if name in os.environ:
         return os.environ[name]
 
-    # try alternatives
-    for var in jobconf_map[variable].itervalues():
-        var = _jobconf_to_env_var(var)
-        if var in os.environ:
-            return os.environ[var]
+    # try alternatives (arbitrary order)
+    for var in _jobconf_map[variable].itervalues():
+        name = var.replace('.', '_')
+        if name in os.environ:
+            return os.environ[name]
 
-    raise KeyError("%s jobconf variable not found" % variable)
+    return default
 
 
-def translate_jobconf(version, variable):
-    """Translate *variable* to Hadoop version *version*, throwing a
-    :py:mod:`KeyError` if it cannot be found in the internal mapping
+def translate_jobconf(variable, version):
+    """Translate *variable* to Hadoop version *version*. If it's not
+    a variable we recognize, leave as-is.
     """
+    if not variable in _jobconf_map:
+        return variable
+
     req_version = LooseVersion(version)
-    possible_versions = sorted(jobconf_map[variable].keys(),
+    possible_versions = sorted(_jobconf_map[variable].keys(),
                                reverse=True,
                                key=lambda(v): LooseVersion(v))
 
     for possible_version in possible_versions:
         if req_version >= LooseVersion(possible_version):
-            return jobconf_map[variable][possible_version]
+            return _jobconf_map[variable][possible_version]
 
     # return oldest version if we don't find required version
-    return jobconf_map[variable][possible_versions[-1]]
+    return _jobconf_map[variable][possible_versions[-1]]
 
 
 def supports_combiners_in_hadoop_streaming(version):
@@ -507,15 +514,6 @@ def supports_new_distributed_cache_options(version):
     ``-cacheArchive``
     """
     return version_gte(version, '0.20')
-
-
-def translate_env(version, env_var):
-    """Translate *env_var* into version (same as
-    :py:meth:`translate_jobconf` but with underscores)
-    """
-    jobconf_var = _env_var_to_jobconf(env_var)
-    translated_jobconf_var = translate_jobconf(version, jobconf_var)
-    return _jobconf_to_env_var(translated_jobconf_var)
 
 
 def uses_generic_jobconf(version):

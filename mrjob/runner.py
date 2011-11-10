@@ -115,8 +115,9 @@ class MRJobRunner(object):
 
     def __init__(self, mr_job_script=None, conf_path=None,
                  extra_args=None, file_upload_args=None,
-                 input_paths=None, output_dir=None, stdin=None,
-                 **opts):
+                 hadoop_input_format=None, hadoop_output_format=None,
+                 input_paths=None, output_dir=None, partitioner=None,
+                 stdin=None, **opts):
         """All runners take the following keyword arguments:
 
         :type mr_job_script: str
@@ -139,6 +140,22 @@ class MRJobRunner(object):
                                  with ``--ARGNAME``. Useful for passing in
                                  SQLite DBs and other configuration files to
                                  your job.
+        :type hadoop_input_format: str
+        :param hadoop_input_format: name of an optional Hadoop ``InputFormat``
+                                    class. Passed to Hadoop along with your
+                                    first step with the ``-inputformat``
+                                    option. Note that if you write your own
+                                    class, you'll need to include it in your
+                                    own custom streaming jar (see
+                                    *hadoop_streaming_jar*).
+        :type hadoop_output_format: str
+        :param hadoop_output_format: name of an optional Hadoop
+                                     ``OutputFormat`` class. Passed to Hadoop
+                                     along with your first step with the
+                                     ``-outputformat`` option. Note that if you
+                                     write your own class, you'll need to
+                                     include it in your own custom streaming
+                                     jar (see *hadoop_streaming_jar*).
         :type input_paths: list of str
         :param input_paths: Input files for your job. Supports globs and
                             recursively walks directories (e.g.
@@ -151,6 +168,12 @@ class MRJobRunner(object):
                            output into a subdirectory of this job's temporary
                            directory. You can control this from the command
                            line with ``--output-dir``.
+        :type partitioner: str
+        :param partitioner: Optional name of a Hadoop partitoner class, e.g.
+                            ``'org.apache.hadoop.mapred.lib.HashPartitioner'``.
+                            Hadoop streaming will use this to determine how
+                            mapper output should be sorted and distributed
+                            to reducers.
         :param stdin: an iterable (can be a ``StringIO`` or even a list) to use
                       as stdin. This is a hook for testing; if you set
                       ``stdin`` via :py:meth:`~mrjob.job.MRJob.sandbox`, it'll
@@ -180,22 +203,6 @@ class MRJobRunner(object):
                        streaming
         :type hadoop_extra_args: list of str
         :param hadoop_extra_args: extra arguments to pass to hadoop streaming
-        :type hadoop_input_format: str
-        :param hadoop_input_format: name of an optional Hadoop ``InputFormat``
-                                    class. Passed to Hadoop along with your
-                                    first step with the ``-inputformat``
-                                    option. Note that if you write your own
-                                    class, you'll need to include it in your
-                                    own custom streaming jar (see
-                                    *hadoop_streaming_jar*).
-        :type hadoop_output_format: str
-        :param hadoop_output_format: name of an optional Hadoop
-                                     ``OutputFormat`` class. Passed to Hadoop
-                                     along with your first step with the
-                                     ``-outputformat`` option. Note that if you
-                                     write your own class, you'll need to
-                                    include it in your own custom streaming
-                                    jar (see *hadoop_streaming_jar*).
         :type hadoop_streaming_jar: str
         :param hadoop_streaming_jar: path to a custom hadoop streaming jar.
         :type jobconf: dict
@@ -304,8 +311,8 @@ class MRJobRunner(object):
             for choice in opt_list:
                 if choice not in CLEANUP_CHOICES:
                     raise ValueError(error_str % choice)
-            if 'NONE' in opt_list and len(opt_list) > 1:
-                self.option_parser.error(
+            if 'NONE' in opt_list and len(set(opt_list)) > 1:
+                raise ValueError(
                     'Cannot clean up both nothing and something!')
 
         cleanup_error = ('cleanup must be one of %s, not %%s' %
@@ -377,6 +384,13 @@ class MRJobRunner(object):
         # store output_dir
         self._output_dir = output_dir
 
+        # store partitioner
+        self._partitioner = partitioner
+
+        # store hadoop input and output formats
+        self._hadoop_input_format = hadoop_input_format
+        self._hadoop_output_format = hadoop_output_format
+
         # give this job a unique name
         self._job_name = self._make_unique_job_name(
             label=self._opts['label'], owner=self._opts['owner'])
@@ -390,7 +404,8 @@ class MRJobRunner(object):
 
     @classmethod
     def _allowed_opts(cls):
-        """A list of which keyword args we can pass to __init__()"""
+        """A list of the options that can be passed to :py:meth:`__init__`
+        *and* can be defaulted from :mod:`mrjob.conf`."""
         return [
             'base_tmp_dir',
             'bootstrap_mrjob',
@@ -398,8 +413,6 @@ class MRJobRunner(object):
             'cleanup_on_failure',
             'cmdenv',
             'hadoop_extra_args',
-            'hadoop_input_format',
-            'hadoop_output_format',
             'hadoop_streaming_jar',
             'hadoop_version',
             'jobconf',
@@ -1152,7 +1165,7 @@ class MRJobRunner(object):
         """Build a list of extra arguments to the hadoop binary.
 
         This handles *cmdenv*, *hadoop_extra_args*, *hadoop_input_format*,
-        *hadoop_output_format*, and *jobconf*
+        *hadoop_output_format*, *jobconf*, and *partitioner*.
 
         This doesn't handle input, output, mappers, reducers, or uploading
         files.
@@ -1170,20 +1183,22 @@ class MRJobRunner(object):
             for key, value in sorted(self._opts['jobconf'].iteritems()):
                 args.extend(['-D', '%s=%s' % (key, value)])
 
+        # partitioner
+        if self._partitioner:
+            args.extend(['-partitioner', self._partitioner])
+
         # cmdenv
         for key, value in sorted(self._get_cmdenv().iteritems()):
             args.append('-cmdenv')
             args.append('%s=%s' % (key, value))
 
         # hadoop_input_format
-        if (step_num == 0 and
-            self._opts.get('hadoop_input_format')):
-            args.extend(['-inputformat', self._opts['hadoop_input_format']])
+        if (step_num == 0 and self._hadoop_input_format):
+            args.extend(['-inputformat', self._hadoop_input_format])
 
         # hadoop_output_format
-        if (step_num == num_steps - 1 and
-            self._opts.get('hadoop_output_format')):
-            args.extend(['-outputformat', self._opts['hadoop_output_format']])
+        if (step_num == num_steps - 1 and self._hadoop_output_format):
+            args.extend(['-outputformat', self._hadoop_output_format])
 
         # old-style jobconf
         if not compat.uses_generic_jobconf(version):

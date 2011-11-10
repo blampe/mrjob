@@ -989,6 +989,12 @@ class MRJob(object):
             'and must be empty')
 
         self.runner_opt_group.add_option(
+            '--partitioner', dest='partitioner', default=None,
+            help=('Hadoop partitioner class to use to determine how mapper'
+                  ' output should be sorted and distributed to reducers. For'
+                  ' example: org.apache.hadoop.mapred.lib.HashPartitioner'))
+
+        self.runner_opt_group.add_option(
             '--python-archive', dest='python_archives', default=[],
             action='append',
             help=('Archive to unpack and add to the PYTHONPATH of the mr_job'
@@ -1072,16 +1078,21 @@ class MRJob(object):
 
         self.hadoop_emr_opt_group.add_option(
             '--hadoop-input-format', dest='hadoop_input_format', default=None,
-            help=('the hadoop InputFormat class used to write the data.'
-                  ' Custom formats must be included in your hadoop streaming'
-                  ' jar (see --hadoop-streaming-jar)'))
+            help=('DEPRECATED: the hadoop InputFormat class used by the first'
+                  ' step of your job to read data. Custom formats must be'
+                  ' included in your hadoop streaming jar (see'
+                  ' --hadoop-streaming-jar). Current best practice is to'
+                  ' redefine HADOOP_INPUT_FORMAT or hadoop_input_format()'
+                  ' in your job.'))
 
         self.hadoop_emr_opt_group.add_option(
-            '--hadoop-output-format', dest='hadoop_output_format',
-            default=None,
-            help=('the hadoop OutputFormat class used to write the data.'
-                  'Custom formats must be included in your hadoop streaming'
-                  ' jar (see --hadoop-streaming-jar)'))
+            '--hadoop-output-format', dest='hadoop_output_format', default=None,
+            help=('DEPRECATED: the hadoop OutputFormat class used by the first'
+                  ' step of your job to read data. Custom formats must be'
+                  ' included in your hadoop streaming jar (see'
+                  ' --hadoop-streaming-jar). Current best practice is to'
+                  ' redefine HADOOP_OUTPUT_FORMAT or hadoop_output_format()'
+                  ' in your job.'))
 
         self.hadoop_emr_opt_group.add_option(
             '--hadoop-streaming-jar', dest='hadoop_streaming_jar',
@@ -1343,7 +1354,7 @@ class MRJob(object):
         directory.
 
         We suggest against sending Berkeley DBs to your job, as
-        Berkeley DB is not forwards-compatiable (so a Berkeley DB that you
+        Berkeley DB is not forwards-compatible (so a Berkeley DB that you
         construct on your computer may not be readable from within
         Hadoop). Use SQLite databases instead. If all you need is an on-disk
         hash table, try out the :py:mod:`sqlite3dbm` module.
@@ -1410,7 +1421,8 @@ class MRJob(object):
                     new_cleanup_options.append(choice)
                 else:
                     self.option_parser.error(cleanup_error % choice)
-            if 'NONE' in new_cleanup_options and len(new_cleanup_options) > 1:
+            if ('NONE' in new_cleanup_options and
+                len(set(new_cleanup_options)) > 1):
                 self.option_parser.error(
                     'Cannot clean up both nothing and something!')
             return new_cleanup_options
@@ -1420,6 +1432,8 @@ class MRJob(object):
         if self.options.cleanup_on_failure is not None:
             self.options.cleanup_on_failure = parse_commas(
                 self.options.cleanup_on_failure)
+
+        # DEPRECATED protocol stuff
 
         # output_protocol defaults to protocol
         if not self.options.output_protocol:
@@ -1463,16 +1477,17 @@ class MRJob(object):
             'extra_args': self.generate_passthrough_arguments(),
             'file_upload_args': self.generate_file_upload_args(),
             'hadoop_extra_args': self.options.hadoop_extra_args,
-            'hadoop_input_format': self.options.hadoop_input_format,
-            'hadoop_output_format': self.options.hadoop_output_format,
+            'hadoop_input_format': self.hadoop_input_format(),
+            'hadoop_output_format': self.hadoop_output_format(),
             'hadoop_streaming_jar': self.options.hadoop_streaming_jar,
             'hadoop_version': self.options.hadoop_version,
             'input_paths': self.args,
-            'jobconf': self.options.jobconf,
+            'jobconf': self.jobconf(),
             'mr_job_script': self.mr_job_script(),
             'label': self.options.label,
             'output_dir': self.options.output_dir,
             'owner': self.options.owner,
+            'partitioner': self.partitioner(),
             'python_archives': self.options.python_archives,
             'python_bin': self.options.python_bin,
             'setup_cmds': self.options.setup_cmds,
@@ -1584,7 +1599,7 @@ class MRJob(object):
 
     def input_protocol(self):
         """Instance of the protocol to use to convert input lines to Python
-        objects. Default behavior is to return an instace of
+        objects. Default behavior is to return an instance of
         :py:attr:`INPUT_PROTOCOL`.
         """
         if self.options.input_protocol is not None:
@@ -1618,10 +1633,7 @@ class MRJob(object):
             return self.protocols()[self.options.output_protocol]
         else:
             # non-deprecated
-            if self.OUTPUT_PROTOCOL:
-                return self.OUTPUT_PROTOCOL()
-            else:
-                return self.INTERNAL_PROTOCOL()
+            return self.OUTPUT_PROTOCOL()
 
     @classmethod
     def protocols(cls):
@@ -1674,17 +1686,14 @@ class MRJob(object):
     #: See :py:data:`mrjob.protocol` for the full list of protocols.
     INTERNAL_PROTOCOL = JSONProtocol
 
-    #: Protocol to use for writing output. By default, this is set to
-    #: ``None``, which means to fall back on ``INTERNAL_PROTOCOL``.
+    #: Protocol to use for writing output. Default: :py:class:`JSONProtocol`.
     #:
-    #: For example, if you wanted steps to communicate using pickle
-    #: internally, but receive the final output in JSON, you could set::
+    #: For example, if you wanted the final output in repr, you could set::
     #:
-    #:     INTERNAL_PROTOCOL = PickleProtocol
-    #:     OUTPUT_PROTOCOL = JSONProtocol
+    #:     OUTPUT_PROTOCOL = ReprProtocol
     #:
     #: See :py:data:`mrjob.protocol` for the full list of protocols.
-    OUTPUT_PROTOCOL = None
+    OUTPUT_PROTOCOL = JSONProtocol
 
     #: DEPRECATED
     #:
@@ -1709,7 +1718,7 @@ class MRJob(object):
     #: DEPRECATED
     #:
     #: Default protocol to use for writing output specified by a string.
-    #: Default: NOne.
+    #: Default: None.
     #:
     #: See :py:data:`mrjob.protocol.PROTOCOL_DICT` for the full list of
     #: protocol strings. Can be overridden by the :option:`--output-protocol`.
@@ -1725,6 +1734,104 @@ class MRJob(object):
                 key, value = mr_job.parse_output_line(line)
         """
         return self.output_protocol().read(line)
+
+    ### Hadoop Input/Output Formats ###
+
+    #: Optional name of an optional Hadoop ``InputFormat`` class, e.g.
+    #: ``'org.apache.hadoop.mapred.lib.NLineInputFormat'``.
+    #:
+    #: Passed to Hadoop with the *first* step of this job with the
+    #: ``-inputformat`` option.
+    HADOOP_INPUT_FORMAT = None
+
+    def hadoop_input_format(self):
+        """Optional Hadoop ``InputFormat`` class to parse input for
+        the first step of the job.
+
+        Normally, setting :py:attr:`HADOOP_INPUT_FORMAT` is sufficient;
+        redefining this method is only for when you want to get fancy.
+        """
+        if self.options.hadoop_input_format:
+            log.warn('--hadoop-input-format is deprecated as of mrjob 0.3 and'
+                     ' will no longer be supported in mrjob 0.4. Redefine'
+                     ' HADOOP_INPUT_FORMAT or hadoop_input_format() instead.')
+            return self.options.hadoop_input_format
+        else:
+            return self.HADOOP_INPUT_FORMAT
+
+    #: Optional name of an optional Hadoop ``OutputFormat`` class, e.g.
+    #: ``'org.apache.hadoop.mapred.FileOutputFormat'``.
+    #:
+    #: Passed to Hadoop with the *first* step of this job with the
+    #: ``-outputformat`` option.
+    HADOOP_OUTPUT_FORMAT = None
+
+    def hadoop_output_format(self):
+        """Optional Hadoop ``OutputFormat`` class to write output for
+        the last step of the job.
+
+        Normally, setting :py:attr:`HADOOP_OUTPUT_FORMAT` is sufficient;
+        redefining this method is only for when you want to get fancy.
+        """
+        if self.options.hadoop_output_format:
+            log.warn('--hadoop-output-format is deprecated as of mrjob 0.3 and'
+                     ' will no longer be supported in mrjob 0.4. Redefine '
+                     ' HADOOP_OUTPUT_FORMAT or hadoop_output_format() instead.'
+                     )
+            return self.options.hadoop_output_format
+        else:
+            return self.HADOOP_OUTPUT_FORMAT
+
+    ### Partitioning ###
+
+    #: Optional Hadoop partitioner class to use to determine how mapper
+    #: output should be sorted and distributed to reducers. For example:
+    #: ``'org.apache.hadoop.mapred.lib.HashPartitioner'``.
+    PARTITIONER = None
+
+    def partitioner(self):
+        """Optional Hadoop partitioner class to use to determine how mapper
+        output should be sorted and distributed to reducers.
+
+        By default, returns whatever is passed to :option:`--partitioner`,
+        of if that option isn't used, :py:attr:`PARTITIONER`.
+
+        You probably don't need to re-define this; it's just here for
+        completeness.
+        """
+        return self.options.partitioner or self.PARTITIONER
+
+    ### Jobconf ###
+
+    #: Optional jobconf arguments we should always pass to Hadoop. This
+    #: is a map from property name to value. e.g.:
+    #:
+    #: ``{'stream.num.map.output.key.fields': '4'}``
+    #:
+    #: It's recommended that you only use this to hard-code things that
+    #: affect the semantics of your job, and leave performance tweaks to
+    #: the command line or whatever you use to launch your job.
+    JOBCONF = {}
+
+    def jobconf(self):
+        """``-jobconf`` args to pass to hadoop streaming. This should be a map
+        from property name to value.
+
+        By default, this combines :option:`jobconf` options from the command
+        lines with :py:attr:`JOBCONF`, with command line arguments taking
+        precedence.
+
+        If you want to re-define this, it's strongly recommended that do
+        something like this, so as not to inadvertently disable
+        :option:`jobconf`::
+
+            def jobconf(self):
+                orig_jobconf = super(MyMRJobClass, self).jobconf()
+                custom_jobconf = ...
+
+                return mrjob.conf.combine_dicts(orig_jobconf, custom_jobconf)
+        """
+        return combine_dicts(self.JOBCONF, self.options.jobconf)
 
     ### Testing ###
 
@@ -1794,7 +1901,7 @@ class MRJob(object):
         stderr_results = parse_mr_job_stderr(self.stderr.getvalue(), counters)
         return stderr_results['counters']
 
-    def parse_output(self, protocol=DEFAULT_PROTOCOL):
+    def parse_output(self, protocol=None):
         """Convenience method for parsing output from any mapper or reducer,
         all at once.
 
@@ -1806,7 +1913,9 @@ class MRJob(object):
             output = mrjob.parse_output()
 
         :type protocol: str
-        :param protocol: the protocol to use (e.g. ``'json'``)
+        :param protocol: A protocol instance to use (e.g. JSONProtocol()),
+                         Also accepts protocol names (e.g. ``'json'``), but
+                         this is deprecated.
 
         This only works in sandbox mode. This does not clear ``self.stdout``.
         """
@@ -1814,14 +1923,14 @@ class MRJob(object):
             raise AssertionError('You must call sandbox() first;'
                                  ' parse_output() is for testing only.')
 
-        if isinstance(protocol, str):
-            reader = self.protocols()[protocol]
-        else:
-            if protocol is None:
-                protocol = self.internal_protocol()
-            reader = protocol
+        if protocol is None:
+            protocol = JSONProtocol()
+        elif isinstance(protocol, basestring):
+            protocol = self.protocols()[protocol]
+
         lines = StringIO(self.stdout.getvalue())
-        return [reader.read(line) for line in lines]
+        return [protocol.read(line) for line in lines]
+
 
 if __name__ == '__main__':
     MRJob.run()

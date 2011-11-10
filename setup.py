@@ -32,6 +32,7 @@ setup(
     long_description=open('README.rst').read(),
     name='mrjob',
     packages=['mrjob',
+              'mrjob.daemon',
               'mrjob.examples',
               'mrjob.tools',
               'mrjob.tools.emr'],

@@ -624,7 +624,6 @@ class EMRJobRunner(MRJobRunner):
 
         # the ID assigned by EMR to this job (might be None)
         self._emr_job_flow_id = self._opts['emr_job_flow_id']
-        self._pool_name = self._opts['emr_job_flow_pool_name'] or 'default'
 
         # when did our particular task start?
         self._emr_job_start = None
@@ -692,6 +691,7 @@ class EMRJobRunner(MRJobRunner):
             'check_emr_status_every': 30,
             'ec2_master_instance_type': 'm1.small',
             'ec2_slave_instance_type': 'm1.small',
+            'emr_job_flow_pool_name': 'default',
             'hadoop_streaming_jar_on_emr':
                 '/home/hadoop/contrib/streaming/hadoop-streaming.jar',
             'num_ec2_instances': 1,
@@ -1176,7 +1176,7 @@ class EMRJobRunner(MRJobRunner):
             if self._opts['pool_emr_job_flows']:
                 master_bootstrap_script_args = [
                     self._pool_arg(),
-                    self._pool_name,
+                    self._opts['emr_job_flow_pool_name'],
                 ]
             bootstrap_action_args.append(
                 boto.emr.BootstrapAction(
@@ -1230,8 +1230,9 @@ class EMRJobRunner(MRJobRunner):
             name = '%s: Step %d of %d' % (
                 self._job_name, step_num + 1, len(steps))
 
-            # don't terminate a job flow that we didn't create ourselves!
-            if self._opts['emr_job_flow_id']:
+            # don't terminate other people's job flows
+            if (self._opts['emr_job_flow_id'] or
+                self._opts['pool_emr_job_flows']):
                 action_on_failure = 'CANCEL_AND_WAIT'
             else:
                 action_on_failure = 'TERMINATE_JOB_FLOW'
@@ -2038,7 +2039,7 @@ class EMRJobRunner(MRJobRunner):
                 return False
 
             args = [arg.value for arg in job_flow.bootstrapactions[-1].args]
-            if not args == [pool_arg, self._pool_name]:
+            if not args == [pool_arg, self._opts['emr_job_flow_pool_name']]:
                 return False
 
             # sanity check for proper type of job flow
@@ -2240,7 +2241,9 @@ class EMRJobRunner(MRJobRunner):
         workaround.
         """
         for line in lines:
-            for subline in line[:-1].split('\n'):
+            if line.endswith('\n'):
+                line = line[:-1]
+            for subline in line.split('\n'):
                 yield subline + '\n'
 
     def _cat_file(self, filename):

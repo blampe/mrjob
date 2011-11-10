@@ -56,9 +56,10 @@ class InlineMRJobRunner(MRJobRunner):
         args as :py:class:`~mrjob.runner.MRJobRunner`. However, please note:
 
         * *hadoop_extra_args*, *hadoop_input_format*, *hadoop_output_format*,
-          and *hadoop_streaming_jar*, and *jobconf* are ignored because they
-          require Java. If you need to test these, consider starting up a
-          standalone Hadoop instance and running your job with ``-r hadoop``.
+          and *hadoop_streaming_jar*, *jobconf*, and *partitioner* are ignored
+          because they require Java. If you need to test these, consider
+          starting up a standalone Hadoop instance and running your job with
+          ``-r hadoop``.
         * *cmdenv*, *python_bin*, *setup_cmds*, *setup_scripts*,
           *steps_python_bin*, *upload_archives*, and *upload_files* are ignored
           because we don't invoke the job as a subprocess or run it in its own
@@ -82,10 +83,17 @@ class InlineMRJobRunner(MRJobRunner):
     # options that we ignore because they require real Hadoop
     IGNORED_HADOOP_OPTS = [
         'hadoop_extra_args',
-        'hadoop_input_format',
-        'hadoop_output_format',
         'hadoop_streaming_jar',
         'jobconf'
+    ]
+
+    # keyword arguments that we ignore that are stored directly in
+    # self._<kwarg_name> because they aren't configurable from mrjob.conf
+    # use the version with the underscore to better support grepping our code
+    IGNORED_HADOOP_ATTRS = [
+        '_hadoop_input_format',
+        '_hadoop_output_format',
+        '_partitioner',
     ]
 
     # options that we ignore because they involve running subprocesses
@@ -109,6 +117,13 @@ class InlineMRJobRunner(MRJobRunner):
             if self._opts[ignored_opt] != default_opts[ignored_opt]:
                 log.warning('ignoring %s option (requires real Hadoop): %r' %
                             (ignored_opt, self._opts[ignored_opt]))
+
+        for ignored_attr in self.IGNORED_HADOOP_ATTRS:
+            value = getattr(self, ignored_attr)
+            if value is not None:
+                log.warning(
+                    'ignoring %s keyword arg (requires real Hadoop): %r' %
+                    (ignored_attr[1:], value))
 
         for ignored_opt in self.IGNORED_LOCAL_OPTS:
             if self._opts[ignored_opt] != default_opts[ignored_opt]:
