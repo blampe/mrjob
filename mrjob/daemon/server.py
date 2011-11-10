@@ -21,13 +21,14 @@ except ImportError:
     print >> sys.stderr, "mrjobd requires Flask."
     sys.exit(1)
 
-from util import runner_to_json
+from mrjob.daemon.runner import run_job
+from mrjob.daemon.util import runner_to_json
 
 
 app = Flask(__name__)
 
 
-runners = {}
+runners = set()
 
 
 def json_response(data):
@@ -42,13 +43,17 @@ def index():
 @app.route('/jobs', methods=['GET', 'POST'])
 def jobs():
     if request.method == 'POST':
-        args_string = request.form['args']
-        # make a job
-        data = {'status': 'OK'}
+        args = json.loads(request.form['args'])
+        runner = run_job(args)
+        runners.add(runner)
+        data = {
+            'status': 'OK',
+            'runner': runner_to_json(runner),
+        }
         return json_response(data)
     else:
         data = {
-            'jobs': dict((k, v) for k, v in runners.iteritems()),
+            'jobs': [runner_to_json(r) for r in runners],
             'status': 'OK',
         }
         return json_response(data)
