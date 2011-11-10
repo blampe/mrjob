@@ -166,6 +166,24 @@ EC2_INSTANCE_TYPE_TO_MEMORY = {
 }
 
 
+class JobStatus(object):
+    """Just a simple wrapper around some job status data at the moment."""
+    def __init__(self, in_progress=True, success=None):
+
+        self.in_progress = in_progress
+        self.success = success
+
+        self.step_nums = []
+        self.status_strings = []
+        self.total_step_time = datetime.timedelta(0)
+        self.last_state_change_reason = ''
+        self.state = ''
+
+    def __setattr__(self, attribute, value):
+        object.__setattr__(self, attribute, value)
+        object.__setattr__(self, 'time_updated', datetime.datetime.now())
+
+
 def est_time_to_hour(job_flow):
     """If available, get the difference between hours billed and hours used.
     This metric is used to determine which job flow to use if more than one
@@ -1349,13 +1367,112 @@ class EMRJobRunner(MRJobRunner):
         # keep track of when we launched our job
         self._emr_job_start = time.time()
 
+    def get_job_status(self, job_flow):
+        status = JobStatus()
+
+        # find all steps belonging to us, and get their state
+        step_states = []
+        running_step_name = ''
+        total_step_time = 0.0
+
+        job_state = job_flow.state
+        reason = getattr(job_flow, 'laststatechangereason', '')
+        status.last_state_change_reason = reason
+
+        steps = job_flow.steps or []
+        step_nums = []  # step numbers belonging to us. 1-indexed
+        for i, step in enumerate(steps):
+            # ignore steps belonging to other jobs
+            if not step.name.startswith(self._job_name):
+                continue
+
+            step_nums.append(i + 1)
+
+            step.state = step.state
+            step_states.append(step.state)
+            if step.state == 'RUNNING':
+                running_step_name = step.name
+
+            if (hasattr(step, 'startdatetime') and
+                hasattr(step, 'enddatetime')):
+                start_time = iso8601_to_timestamp(step.startdatetime)
+                end_time = iso8601_to_timestamp(step.enddatetime)
+                total_step_time += end_time - start_time
+
+        status.step_nums = step_nums
+        status.total_step_time = total_step_time
+
+        if not step_states:
+            raise AssertionError("Can't find our steps in the job flow!")
+
+        # if all our steps have completed, we're done!
+        if all(state == 'COMPLETED' for state in step_states):
+            status.in_progress = False
+            status.success = True
+            status.state = 'COMPLETED'
+            return status
+
+        # if any step fails, give up
+        if any(state in ('FAILED', 'CANCELLED') for state in step_states):
+            status.in_progress = False
+            status.success = False
+            status.state = 'FAILED' # not true, could be cancelled
+            return status
+
+        # (the other step states are PENDING and RUNNING)
+
+        # keep track of how long we've been waiting
+        running_time = time.time() - self._emr_job_start
+
+        # otherwise, we can print a status message
+        if running_step_name:
+            status.status_strings.append(
+                    'Job launched %.1fs ago, status %s: %s (%s)' %
+                     (running_time, job_state, reason, running_step_name)
+            )
+            if self._show_tracker_progress:
+                try:
+                    tracker_handle = urllib2.urlopen(self._tracker_url)
+                    tracker_page = ''.join(tracker_handle.readlines())
+                    tracker_handle.close()
+                    # first two formatted percentages, map then reduce
+                    map_complete, reduce_complete = [float(complete)
+                        for complete in JOB_TRACKER_RE.findall(
+                            tracker_page)[:2]]
+                    status.status_strings.append(
+                            ' map %3.0f%% reduce %3.0f%%' %
+                            (map_complete, reduce_complete)
+                    )
+                except:
+                    log.error('Unable to load progress from job tracker')
+                    # turn off progress for rest of job
+                    self._show_tracker_progress = False
+            # once a step is running, it's safe to set up the ssh tunnel to
+            # the job tracker
+            job_host = getattr(job_flow, 'masterpublicdnsname', None)
+            if job_host and self._opts['ssh_tunnel_to_job_tracker']:
+                self.setup_ssh_tunnel_to_job_tracker(job_host)
+
+        # other states include STARTING and SHUTTING_DOWN
+        elif reason:
+            status.status_strings.append(
+                    'Job launched %.1fs ago, status %s: %s' %
+                    (running_time, job_state, reason)
+            )
+        else:
+            status.status_strings.append(
+                    'Job launched %.1fs ago, status %s' %
+                    (running_time, job_state,)
+            )
+
+        return status
+
     def _wait_for_job_to_complete(self):
         """Wait for the job to complete, and raise an exception if
         the job failed.
 
         Also grab log URI from the job status (since we may not know it)
         """
-        success = False
 
         while True:
             # don't antagonize EMR's throttling
@@ -1367,97 +1484,28 @@ class EMRJobRunner(MRJobRunner):
 
             self._set_s3_job_log_uri(job_flow)
 
-            job_state = job_flow.state
-            reason = getattr(job_flow, 'laststatechangereason', '')
+            self.job_status = self.get_job_status(job_flow)
+            for status_string in self.job_status.status_strings:
+                log.info(status_string)
 
-            # find all steps belonging to us, and get their state
-            step_states = []
-            running_step_name = ''
-            total_step_time = 0.0
-            step_nums = []  # step numbers belonging to us. 1-indexed
-
-            steps = job_flow.steps or []
-            for i, step in enumerate(steps):
-                # ignore steps belonging to other jobs
-                if not step.name.startswith(self._job_name):
-                    continue
-
-                step_nums.append(i + 1)
-
-                step.state = step.state
-                step_states.append(step.state)
-                if step.state == 'RUNNING':
-                    running_step_name = step.name
-
-                if (hasattr(step, 'startdatetime') and
-                    hasattr(step, 'enddatetime')):
-                    start_time = iso8601_to_timestamp(step.startdatetime)
-                    end_time = iso8601_to_timestamp(step.enddatetime)
-                    total_step_time += end_time - start_time
-
-            if not step_states:
-                raise AssertionError("Can't find our steps in the job flow!")
-
-            # if all our steps have completed, we're done!
-            if all(state == 'COMPLETED' for state in step_states):
-                success = True
+            if self.job_status.in_progress == False:
                 break
 
-            # if any step fails, give up
-            if any(state in ('FAILED', 'CANCELLED') for state in step_states):
-                break
+        our_step_numbers = self.job_status.step_nums
 
-            # (the other step states are PENDING and RUNNING)
-
-            # keep track of how long we've been waiting
-            running_time = time.time() - self._emr_job_start
-
-            # otherwise, we can print a status message
-            if running_step_name:
-                log.info('Job launched %.1fs ago, status %s: %s (%s)' %
-                         (running_time, job_state, reason, running_step_name))
-                if self._show_tracker_progress:
-                    try:
-                        tracker_handle = urllib2.urlopen(self._tracker_url)
-                        tracker_page = ''.join(tracker_handle.readlines())
-                        tracker_handle.close()
-                        # first two formatted percentages, map then reduce
-                        map_complete, reduce_complete = [float(complete)
-                            for complete in JOB_TRACKER_RE.findall(
-                                tracker_page)[:2]]
-                        log.info(' map %3.0f%% reduce %3.0f%%' % (
-                                 map_complete, reduce_complete))
-                    except:
-                        log.error('Unable to load progress from job tracker')
-                        # turn off progress for rest of job
-                        self._show_tracker_progress = False
-                # once a step is running, it's safe to set up the ssh tunnel to
-                # the job tracker
-                job_host = getattr(job_flow, 'masterpublicdnsname', None)
-                if job_host and self._opts['ssh_tunnel_to_job_tracker']:
-                    self.setup_ssh_tunnel_to_job_tracker(job_host)
-
-            # other states include STARTING and SHUTTING_DOWN
-            elif reason:
-                log.info('Job launched %.1fs ago, status %s: %s' %
-                         (running_time, job_state, reason))
-            else:
-                log.info('Job launched %.1fs ago, status %s' %
-                         (running_time, job_state,))
-
-        if success:
+        if self.job_status.success:
             log.info('Job completed.')
             log.info('Running time was %.1fs (not counting time spent waiting'
-                     ' for the EC2 instances)' % total_step_time)
-            self._fetch_counters(step_nums)
-            self.print_counters(range(1, len(step_nums) + 1))
+                     ' for the EC2 instances)' % self.job_status.total_step_time)
+            self._fetch_counters(our_step_numbers)
+            self.print_counters(range(1, len(our_step_numbers) + 1))
         else:
-            msg = 'Job failed with status %s: %s' % (job_state, reason)
+            msg = 'Job failed with status %s: %s' % (self.job_status.state, self.job_status.last_state_change_reason)
             log.error(msg)
             if self._s3_job_log_uri:
                 log.info('Logs are in %s' % self._s3_job_log_uri)
             # look for a Python traceback
-            cause = self._find_probable_cause_of_failure(step_nums)
+            cause = self._find_probable_cause_of_failure(our_step_numbers)
             if cause:
                 # log cause, and put it in exception
                 cause_msg = []  # lines to log and put in exception
@@ -2113,6 +2161,9 @@ class EMRJobRunner(MRJobRunner):
         To list a directory, path_glob must end with a trailing
         slash (foo and foo/ are different on S3)
         """
+        if path_glob is None:
+            return
+
         if SSH_URI_RE.match(path_glob):
             for item in self._ssh_ls(path_glob):
                 yield item
