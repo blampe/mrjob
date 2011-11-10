@@ -530,12 +530,16 @@ class MRJob(object):
         # have to import here so that we can still run the MRJob
         # without importing boto
         from mrjob.emr import EMRJobRunner
+        from mrjob._disco import DiscoJobRunner
         from mrjob.hadoop import HadoopJobRunner
         from mrjob.local import LocalMRJobRunner
         from mrjob.inline import InlineMRJobRunner
 
         if self.options.runner == 'emr':
             return EMRJobRunner(**self.emr_job_runner_kwargs())
+
+        elif self.options.runner == 'disco':
+            return DiscoJobRunner(self, **self.emr_job_runner_kwargs())
 
         elif self.options.runner == 'hadoop':
             return HadoopJobRunner(**self.hadoop_job_runner_kwargs())
@@ -1007,7 +1011,7 @@ class MRJob(object):
 
         self.runner_opt_group.add_option(
             '-r', '--runner', dest='runner', default='local',
-            choices=('local', 'hadoop', 'emr', 'inline'),
+            choices=('local', 'hadoop', 'emr', 'disco', 'inline'),
             help=('Where to run the job: local to run locally, hadoop to run'
                   ' on your Hadoop cluster, emr to run on Amazon'
                   ' ElasticMapReduce, and inline for local debugging. Default'
