@@ -60,7 +60,7 @@ class MRJobDaemonAPI(APIBase):
                          data={
                              'args': json.dumps(args),
                              'path': path,
-                         })['runner']
+                         })['job_name']
 
 
 if __name__ == '__main__':

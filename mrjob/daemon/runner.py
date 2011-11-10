@@ -1,3 +1,6 @@
+from multiprocessing import Process, Queue
+
+
 def import_from_dotted_path(path):
     items = path.split('.')
 
@@ -17,9 +20,21 @@ def import_from_dotted_path(path):
 
 def run_job(module_path, args):
     job_cls = import_from_dotted_path(module_path)
-
     job = job_cls(args=args)
 
-    runner = job.make_runner()
+    queue = Queue()
+    process = Process(target=job_runner, args=(job, queue))
 
-    return runner
+    process.start()
+
+    return process, queue
+
+
+def job_runner(job, queue):
+    with job.make_runner() as runner:
+        queue.put(runner._job_name)
+        runner.run()
+
+        for line in runner.stream_output():
+            queue.put(line)
+    queue.put(None)

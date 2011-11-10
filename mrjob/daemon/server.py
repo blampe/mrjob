@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import json
+from multiprocessing import Process, Queue
 import sys
 
 try:
@@ -28,7 +29,44 @@ from mrjob.daemon.util import runner_to_json
 app = Flask(__name__)
 
 
-runners = set()
+server = None
+client_put, client_get = None, None
+
+
+def queue_iter(queue):
+    while True:
+        x = queue.get()
+        if x is None:
+            break
+        else:
+            yield x
+
+
+def server_func(server_get, server_put):
+    processes = {}
+    queues = {}
+    states = {}
+
+    for cmd in queue_iter(server_get):
+        if cmd is None:
+            break
+        if cmd['command'] == 'run_job':
+            process, queue = run_job(cmd['path'], cmd['args'])
+
+            job_name = queue.get()
+
+            processes[job_name] = process
+            queues[job_name] = queue
+            server_put.put(job_name)
+
+            for line in queue_iter(queue):
+                sys.stdout.write(line)
+
+            del queues[job_name]
+            del processes[job_name]
+
+
+## web requests
 
 
 def json_response(data):
@@ -43,17 +81,23 @@ def index():
 @app.route('/jobs', methods=['GET', 'POST'])
 def jobs():
     if request.method == 'POST':
-        args = json.loads(request.form['args'])
-        runner = run_job(request.form['path'], args)
-        runners.add(runner)
+        client_put.put({
+            'command': 'run_job',
+            'args': json.loads(request.form['args']),
+            'path': request.form['path'],
+        })
+
+        job_name = client_get.get()
+
         data = {
             'status': 'OK',
-            'runner': runner_to_json(runner),
+            'job_name': job_name,
         }
         return json_response(data)
     else:
         data = {
-            'jobs': [runner_to_json(r) for r in runners],
+            'jobs': dict((name, runner_to_json(runner))
+                         for name, runner in runners.iteritems()),
             'status': 'OK',
         }
         return json_response(data)
@@ -63,8 +107,16 @@ def jobs():
 
 
 def main():
+    global server, client_put, client_get
+    client_put = Queue()
+    client_get = Queue()
+    server = Process(target=server_func, args=(client_put, client_get))
+    server.start()
+
     app.debug = True
     app.run()
+
+    server.join()
 
 
 if __name__ == '__main__':
