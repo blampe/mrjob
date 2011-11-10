@@ -1,11 +1,13 @@
 import os
-import sys
 
 import disco
 from disco.core import Job, result_iterator
 from mrjob.emr import EMRJobRunner
 
 
+##########
+# Utilities
+##########
 def my_log(*msg):
 	return # uncomment to enable my ghetto log
 	msg = ' '.join(msg)
@@ -14,6 +16,73 @@ def my_log(*msg):
 	log.flush()
 	os.fsync(log.fileno())
 	log.close()
+
+def piped_subprocess_queue(params, subprocess_args):
+	import Queue
+	from subprocess import Popen, PIPE
+	import thread
+
+	def my_thread(params):
+		while True:
+			line = params['stdout'].readline()
+			if not line:
+				break
+			params['queue'].put(line)
+			my_log('REDUCE read line', line)
+
+	read_stdin, write_stdin = os.pipe()
+	params['stdin_fds'] = (read_stdin, write_stdin)
+
+	read_stdout, write_stdout = os.pipe()
+	params['stdout_fds'] = (read_stdout, write_stdout)
+
+	params['queue'] = Queue.Queue()
+
+	def popen_close_pipes():
+		os.close(write_stdin)
+		os.close(read_stdout)
+	proc = Popen(subprocess_args, preexec_fn=popen_close_pipes, stdin=read_stdin, stdout=write_stdout, stderr=PIPE)
+
+	# we have no business using these.  These are for the subprocess
+	os.close(read_stdin)
+	os.close(write_stdout)
+
+	params['stdout'] = os.fdopen(read_stdout, 'r')
+        params['proc'] = proc
+
+	thread.start_new_thread(my_thread, (params,))
+
+def piped_subprocess_close(params):
+	import os
+	# close the stdin to the process
+	os.close(params['stdin_fds'][1])
+
+	my_log('closed stdin, waiting for proc to end')
+
+	# wait for the stdout from the process to end
+	params['proc'].wait() # probably not right? What happens to stdout?
+
+	my_log('process ended')
+
+##########
+# Mapper
+##########
+def mapper_in(fd, url, size, params):
+	from mrjob._disco import piped_subprocess_queue
+	from mrjob._disco import piped_subprocess_close
+
+        # run the process
+	args = params['mapper_args']
+	piped_subprocess_queue(params, args)
+
+	for line in fd:
+		yield line
+
+	# TODO: Now close
+	piped_subprocess_close(params)
+
+	# yield one more time to flush out the queue
+	yield None
 
 def mapper_runner(line, params):
 	import Queue
@@ -33,52 +102,22 @@ def mapper_runner(line, params):
 	except Queue.Empty:
 		pass
 
+##########
+# Reducer
+##########
 def reducer_runner(iter, out, params):
-	import Queue
-	from subprocess import Popen, PIPE
-	import thread
 	from mrjob._disco import my_log
+	from mrjob._disco import piped_subprocess_queue
+	from mrjob._disco import piped_subprocess_close
 
 	my_log('REDUCE fired up reducer')
 
-	def my_thread(params):
-		while True:
-			line = params['stdout'].readline()
-			if not line:
-				break
-			params['queue'].put(line)
-			my_log('REDUCE read line', line)
-
         # run the process
 	args = params['reducer_args']
+	piped_subprocess_queue(params, args)
 
-	read_stdin, write_stdin = os.pipe()
-	params['stdin_fds'] = (read_stdin, write_stdin)
-
-	read_stdout, write_stdout = os.pipe()
-	params['stdout_fds'] = (read_stdout, write_stdout)
-
-	params['queue'] = Queue.Queue()
-
-	def popen_close_pipes():
-		os.close(write_stdin)
-		os.close(read_stdout)
-	proc = Popen(args, preexec_fn=popen_close_pipes, stdin=read_stdin, stdout=write_stdout, stderr=PIPE)
-
-	# we have no business using these.  These are for the subprocess
-	os.close(read_stdin)
-	os.close(write_stdout)
-
-	params['stdout'] = os.fdopen(read_stdout, 'r')
-        params['proc'] = proc
-
-	thread.start_new_thread(my_thread, (params,))
-
-	for k, v in iter:
-		line = '\t'.join((k, v))
-		os.write(params['stdin_fds'][1], line)
-		my_log('REDUCE writing >>>%s<<<' % line)
-
+	def reducer_flush():
+		import Queue
 		try:
 			while True:
 				line = params['queue'].get_nowait()
@@ -89,86 +128,19 @@ def reducer_runner(iter, out, params):
 		except Queue.Empty:
 			pass
 
+	for k, v in iter:
+		line = '\t'.join((k, v))
+		os.write(params['stdin_fds'][1], line)
+		my_log('REDUCE writing >>>%s<<<' % line)
+		reducer_flush()
+
 	# Now close the process
-
-	# close the stdin to the process
-	os.close(write_stdin)
-
-	my_log('closed stdin, waiting for proc to end')
-
-	# wait for the stdout from the process to end
-	proc.wait() # probably not right? What happens to stdout?
-
-	my_log('process ended')
+	piped_subprocess_close(params)
 
 	# flush out the queue
-	try:
-		while True:
-			line = params['queue'].get_nowait()
-			my_log('popping line from queue >>>%s<<<' % line)
+	reducer_flush()
 
-			k, v = line.split('\t')
-			out.add(k, v)
-	except Queue.Empty:
-		pass
 
-def mapper_in(fd, url, size, params):
-	from subprocess import Popen, PIPE
-	import os
-	import os.path
-	import Queue
-	import thread
-	from mrjob._disco import my_log
-
-	def my_thread(params):
-		while True:
-			line = params['stdout'].readline()
-			if not line:
-				break
-			params['queue'].put(line)
-			my_log('read line', line)
-
-        # run the process
-	args = params['mapper_args']
-
-	read_stdin, write_stdin = os.pipe()
-	params['stdin_fds'] = (read_stdin, write_stdin)
-
-	read_stdout, write_stdout = os.pipe()
-	params['stdout_fds'] = (read_stdout, write_stdout)
-
-	params['queue'] = Queue.Queue()
-
-	def popen_close_pipes():
-		os.close(write_stdin)
-		os.close(read_stdout)
-	proc = Popen(args, preexec_fn=popen_close_pipes, stdin=read_stdin, stdout=write_stdout, stderr=PIPE)
-
-	# we have no business using these.  These are for the subprocess
-	os.close(read_stdin)
-	os.close(write_stdout)
-
-	params['stdout'] = os.fdopen(read_stdout, 'r')
-        params['proc'] = proc
-
-	thread.start_new_thread(my_thread, (params,))
-
-	for line in fd:
-		yield line
-
-	# TODO: Now close
-
-	# close the stdin to the process
-	os.close(write_stdin)
-
-	my_log('closed stdin, waiting for proc to end')
-
-	# wait for the stdout from the process to end
-	proc.wait() # probably not right? What happens to stdout?
-
-	my_log('process ended')
-
-	yield None # yield one more time to flush out the queue
 
 class DiscoJobRunner(EMRJobRunner):
 	def __init__(self, job, *args, **kwargs):
@@ -205,7 +177,6 @@ class DiscoJobRunner(EMRJobRunner):
 		for i, step in enumerate(self._get_steps()):
 			job_params = {}
 
-			job_params['sys.path'] = sys.path
 			if 'M' in step:
 				job_params['mapper_args'] = wrapper_args + [self._script['path'],
 					'--step-num=%d' % i, '--mapper'] + self._mr_job_extra_args()
