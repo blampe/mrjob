@@ -179,6 +179,11 @@ class JobStatus(object):
         self.last_state_change_reason = ''
         self.state = ''
 
+    def __setattr__(self, attribute, value):
+        object.__setattr__(self, attribute, value)
+        object.__setattr__(self, 'time_updated', datetime.datetime.now())
+
+
 def est_time_to_hour(job_flow):
     """If available, get the difference between hours billed and hours used.
     This metric is used to determine which job flow to use if more than one
@@ -1377,7 +1382,6 @@ class EMRJobRunner(MRJobRunner):
         step_nums = []  # step numbers belonging to us. 1-indexed
         for i, step in enumerate(steps):
             # ignore steps belonging to other jobs
-            #import ipdb; ipdb.set_trace()
             if not step.name.startswith(self._job_name):
                 continue
 
@@ -1479,23 +1483,23 @@ class EMRJobRunner(MRJobRunner):
 
             self._set_s3_job_log_uri(job_flow)
 
-            job_status = self.get_job_status(job_flow)
-            for status_string in job_status.status_strings:
+            self.job_status = self.get_job_status(job_flow)
+            for status_string in self.job_status.status_strings:
                 log.info(status_string)
 
-            if job_status.in_progress == False:
+            if self.job_status.in_progress == False:
                 break
 
-        our_step_numbers = job_status.step_nums
+        our_step_numbers = self.job_status.step_nums
 
-        if job_status.success:
+        if self.job_status.success:
             log.info('Job completed.')
             log.info('Running time was %.1fs (not counting time spent waiting'
-                     ' for the EC2 instances)' % job_status.total_step_time)
+                     ' for the EC2 instances)' % self.job_status.total_step_time)
             self._fetch_counters(our_step_numbers)
             self.print_counters(range(1, len(our_step_numbers) + 1))
         else:
-            msg = 'Job failed with status %s: %s' % (job_status.state, job_status.last_state_change_reason)
+            msg = 'Job failed with status %s: %s' % (self.job_status.state, self.job_status.last_state_change_reason)
             log.error(msg)
             if self._s3_job_log_uri:
                 log.info('Logs are in %s' % self._s3_job_log_uri)
