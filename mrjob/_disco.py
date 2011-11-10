@@ -6,35 +6,111 @@ from disco.core import Job, result_iterator
 from mrjob.emr import EMRJobRunner
 
 
-def map_init(input_iter, params):
-	pass
-
-def reduce_init(input_iter, params):
-	pass
+def my_log(*msg):
+	return # uncomment to enable my ghetto log
+	msg = ' '.join(msg)
+	log = open('/tmp/mrdisco_stderr', 'a')
+	print >> log, msg
+	log.flush()
+	os.fsync(log.fileno())
+	log.close()
 
 def mapper_runner(line, params):
 	import Queue
-
-	log = open('/tmp/mrdisco_stderr', 'a')
+	from mrjob._disco import my_log
 
 	if line is not None:
 		os.write(params['stdin_fds'][1], line)
-		print >> log, 'writing line', line
-		log.flush()
-		os.fsync(log.fileno())
+		my_log('writing line', line)
 
 	try:
 		while True:
 			line = params['queue'].get_nowait()
-			print >> log, 'popping line from queue >>>%s<<<' % line
-			log.flush()
-			os.fsync(log.fileno())
+			my_log('popping line from queue >>>%s<<<' % line)
 
 			k, v = line.split('\t')
 			yield k, v
 	except Queue.Empty:
 		pass
-	log.close()
+
+def reducer_runner(iter, out, params):
+	import Queue
+	from subprocess import Popen, PIPE
+	import thread
+	from mrjob._disco import my_log
+
+	my_log('REDUCE fired up reducer')
+
+	def my_thread(params):
+		while True:
+			line = params['stdout'].readline()
+			if not line:
+				break
+			params['queue'].put(line)
+			my_log('REDUCE read line', line)
+
+        # run the process
+	args = params['reducer_args']
+
+	read_stdin, write_stdin = os.pipe()
+	params['stdin_fds'] = (read_stdin, write_stdin)
+
+	read_stdout, write_stdout = os.pipe()
+	params['stdout_fds'] = (read_stdout, write_stdout)
+
+	params['queue'] = Queue.Queue()
+
+	def popen_close_pipes():
+		os.close(write_stdin)
+		os.close(read_stdout)
+	proc = Popen(args, preexec_fn=popen_close_pipes, stdin=read_stdin, stdout=write_stdout, stderr=PIPE)
+
+	# we have no business using these.  These are for the subprocess
+	os.close(read_stdin)
+	os.close(write_stdout)
+
+	params['stdout'] = os.fdopen(read_stdout, 'r')
+        params['proc'] = proc
+
+	thread.start_new_thread(my_thread, (params,))
+
+	for k, v in iter:
+		line = '\t'.join((k, v))
+		os.write(params['stdin_fds'][1], line)
+		my_log('REDUCE writing >>>%s<<<' % line)
+
+		try:
+			while True:
+				line = params['queue'].get_nowait()
+				my_log('REDUCE popping line from queue >>>%s<<<' % line)
+
+				k, v = line.split('\t')
+				out.add(k, v)
+		except Queue.Empty:
+			pass
+
+	# Now close the process
+
+	# close the stdin to the process
+	os.close(write_stdin)
+
+	my_log('closed stdin, waiting for proc to end')
+
+	# wait for the stdout from the process to end
+	proc.wait() # probably not right? What happens to stdout?
+
+	my_log('process ended')
+
+	# flush out the queue
+	try:
+		while True:
+			line = params['queue'].get_nowait()
+			my_log('popping line from queue >>>%s<<<' % line)
+
+			k, v = line.split('\t')
+			out.add(k, v)
+	except Queue.Empty:
+		pass
 
 def mapper_in(fd, url, size, params):
 	from subprocess import Popen, PIPE
@@ -42,18 +118,15 @@ def mapper_in(fd, url, size, params):
 	import os.path
 	import Queue
 	import thread
+	from mrjob._disco import my_log
 
 	def my_thread(params):
-		log = open('/tmp/mrdisco_stderr', 'a')
 		while True:
 			line = params['stdout'].readline()
 			if not line:
 				break
 			params['queue'].put(line)
-			print >> log, 'read line', line
-			log.flush()
-			os.fsync(log.fileno())
-		log.close()
+			my_log('read line', line)
 
         # run the process
 	args = params['mapper_args']
@@ -80,7 +153,6 @@ def mapper_in(fd, url, size, params):
 
 	thread.start_new_thread(my_thread, (params,))
 
-	log = open('/tmp/mrdisco_stderr', 'a')
 	for line in fd:
 		yield line
 
@@ -89,25 +161,14 @@ def mapper_in(fd, url, size, params):
 	# close the stdin to the process
 	os.close(write_stdin)
 
-	print >> log, 'closed stdin, waiting for proc to end'
-	log.flush()
-	os.fsync(log.fileno())
+	my_log('closed stdin, waiting for proc to end')
 
 	# wait for the stdout from the process to end
 	proc.wait() # probably not right? What happens to stdout?
 
-	print >> log, 'process ended'
-	log.flush()
-	os.fsync(log.fileno())
+	my_log('process ended')
 
 	yield None # yield one more time to flush out the queue
-
-	log.close()
-
-	# TODO: end the thread
-
-def reducer_runner(*args, **kwargs):
-	pass
 
 class DiscoJobRunner(EMRJobRunner):
 	def __init__(self, job, *args, **kwargs):
@@ -154,13 +215,11 @@ class DiscoJobRunner(EMRJobRunner):
 					'--step-num=%d' % i, '--reducer'] + self._mr_job_extra_args()
 
 			job = Job().run(input=inputs,
-				map_init=map_init,
 				map=mapper_runner,
-				reduce_init=reduce_init,
 				reduce=reducer_runner,
 				required_files=all_files,
 				required_modules=[],
-				sorted=True,
+				sort=True,
 				map_input_stream=[
 					disco.worker.classic.func.map_input_stream,
 					disco.worker.classic.func.gzip_line_reader,
