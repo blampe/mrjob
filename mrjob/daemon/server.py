@@ -44,7 +44,7 @@ def index():
 def jobs():
     if request.method == 'POST':
         args = json.loads(request.form['args'])
-        runner = run_job(args)
+        runner = run_job(request.form['path'], args)
         runners.add(runner)
         data = {
             'status': 'OK',
