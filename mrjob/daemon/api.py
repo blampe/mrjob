@@ -94,10 +94,9 @@ class MRJobDaemonAPI(APIBase):
 if __name__ == '__main__':
     api = MRJobDaemonAPI('http://127.0.0.1:5000')
 
-    #job_name = api.run_job('mrjob.examples.mr_word_freq_count.MRWordFreqCount',
-    #                       ['-r', 'emr', '--emr-job-flow-id', 'j-3LD0PP3C9B0S9',
-    #                        '/nail/home/sjohnson/pg/mrjob/README.rst'])
-    job_name = 'mr_word_freq_count.sjohnson.20111111.232752.927171'
+    job_name = api.run_job('mrjob.examples.mr_word_freq_count.MRWordFreqCount',
+                           ['-r', 'emr', '--emr-job-flow-id', 'j-3LD0PP3C9B0S9',
+                            '/nail/home/sjohnson/pg/mrjob/README.rst'])
 
     status = dict(complete=False)
 
