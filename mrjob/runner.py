@@ -92,7 +92,7 @@ class JobStatus(object):
 
     def as_dict(self):
         attrs = ('in_progress', 'success', 'status_strings',
-                 'last_state_change_reason', 'state')
+                 'last_state_change_reason', 'state', 'time_updated')
         return dict((a, getattr(self, a)) for a in attrs)
 
     def __setattr__(self, attribute, value):

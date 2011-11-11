@@ -228,7 +228,8 @@ class LocalMRJobRunner(MRJobRunner):
         status.state = 'COMPLETED'
         status.in_progress = False
         status.success = True
-        status.status_strings.append('Job complete')
+        running_time = time.time() - job_start_time
+        status.status_strings.append('Job complete after %.1fs' % running_time)
         self.update_status(status)
 
     def _process_jobconf_args(self, jobconf):
