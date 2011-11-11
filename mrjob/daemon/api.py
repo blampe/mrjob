@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import json
+import os
 
 import requests
 
@@ -53,16 +54,38 @@ class APIBase(object):
 class MRJobDaemonAPI(APIBase):
 
     def run_job(self, path, args):
-        return self.post('/run_job',
-                         data={
-                             'args': json.dumps(args),
-                             'path': path,
-                         })['job_name']
+        if '/' in path:
+            return self.post('/run_job',
+                             data={
+                                 'args': json.dumps(args),
+                                 'path': os.path.abspath(path),
+                             })['job_name']
+        else:
+            return self.post('/run_job',
+                             data={
+                                 'args': json.dumps(args),
+                                 'path': path,
+                             })['job_name']
+
+    def get_stdout(self, job_name):
+            return self.get('/%s/stdout' % job_name)['stdout']
+
+    def get_stderr(self, job_name):
+            return self.get('/%s/stderr' % job_name)['stderr']
 
 
 if __name__ == '__main__':
     api = MRJobDaemonAPI('http://127.0.0.1:5000')
 
-    print api.run_job('mrjob.examples.mr_word_freq_count.MRWordFreqCount',
-                      ['-r', 'local',
-                       '/nail/home/sjohnson/pg/mrjob/README.rst'])
+    print 'stdout:'
+    print api.get_stdout('mr_word_freq_count.sjohnson.20111111.012938.397848')
+
+    print 'stderr:'
+    print api.get_stderr('mr_word_freq_count.sjohnson.20111111.012938.397848')
+
+    print 'bad stdout:'
+    print api.get_stdout('doesnotexist')
+
+    #print api.run_job('mrjob.examples.mr_word_freq_count.MRWordFreqCount',
+    #                  ['-r', 'local',
+    #                   '/nail/home/sjohnson/pg/mrjob/README.rst'])

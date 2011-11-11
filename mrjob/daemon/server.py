@@ -16,6 +16,7 @@ from imp import load_source
 import json
 from multiprocessing import Process, Queue
 import optparse
+import os
 import sys
 
 try:
@@ -24,7 +25,7 @@ except ImportError:
     print >> sys.stderr, "mrjobd requires Flask."
     sys.exit(1)
 
-from mrjob.daemon.runner import run_job
+from mrjob.daemon.runner import run_job, wd_path
 from mrjob.daemon.util import runner_to_json
 from mrjob.local import LocalMRJobRunner
 from mrjob.util import log_to_stream
@@ -76,44 +77,63 @@ def json_response(data):
     return Response(json.dumps(data), mimetype='text/json')
 
 
-@app.route('/', methods=['GET'])
-def index():
-    return redirect(url_for('jobs'))
+@app.route('/run_job', methods=['POST'])
+def run_job():
+    args = json.loads(request.form['args'])
+    path = request.form['path']
 
-
-@app.route('/run_job', methods=['GET', 'POST'])
-def jobs():
-    if request.method == 'POST':
-        args = json.loads(request.form['args'])
-        path = request.form['path']
-
-        if '/' in path:
-            items = path.split(' ')
-            path = ' '.join(items[:-1])
-            classname = items[-1]
-            process, info_queue = run_job(
-                import_from_system_path(path, classname), args, wd)
-        else:
-            process, info_queue = run_job(
-                import_from_dotted_path(path), args, wd)
-        processes.add(process)
-
-        job_name = info_queue.get()
-
-        data = {
-            'status': 'OK',
-            'job_name': job_name,
-        }
-        return json_response(data)
+    if '/' in path:
+        items = path.split(' ')
+        path = ' '.join(items[:-1])
+        classname = items[-1]
+        process, info_queue = run_job(
+            import_from_system_path(path, classname), args, wd)
     else:
-        client_put.put({
-            'command': 'list_jobs',
-        })
-        data = {
-            'jobs': client_get.get(),
-            'status': 'OK',
-        }
-        return json_response(data)
+        process, info_queue = run_job(
+            import_from_dotted_path(path), args, wd)
+    processes.add(process)
+
+    job_name = info_queue.get()
+
+    data = {
+        'status': 'OK',
+        'job_name': job_name,
+    }
+    return json_response(data)
+
+
+@app.route('/<job_name>/stdout', methods=['GET'])
+def get_stdout(job_name):
+    if not os.path.exists(wd_path(wd, job_name)):
+        abort(404)
+    path = wd_path(wd, job_name, 'stdout')
+
+    data = {
+        'status': 'OK',
+    }
+    if not os.path.exists(path):
+        data['stdout'] = ''
+    else:
+        with open(path, 'r') as f:
+            data['stdout'] = f.read()
+    return json_response(data)
+
+
+@app.route('/<job_name>/stderr', methods=['GET'])
+def get_stderr(job_name):
+    if not os.path.exists(wd_path(wd, job_name)):
+        abort(404)
+    path = wd_path(wd, job_name, 'stderr')
+
+    data = {
+        'status': 'OK',
+    }
+    if not os.path.exists(path):
+        data['stderr'] = ''
+    else:
+        with open(path, 'r') as f:
+            data['stderr'] = f.read()
+    return json_response(data)
 
 
 ## Starting the process
