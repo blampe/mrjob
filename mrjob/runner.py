@@ -131,6 +131,13 @@ class JobStatus(object):
         #: CANCELLED, PENDING, WAITING, RUNNING, UNKNOWN
         self.state = 'UNKNOWN'
 
+        self.counters = []
+
+        #: True if all job actions have been completed. Distinct from
+        #: in_progress because it encompasses streaming the output in addition
+        #: to just finishing processing
+        self.complete = False
+
     def generate_status_message(self):
         """Add a status message based on job status attributes"""
         if self.running_step_name:
@@ -160,6 +167,8 @@ class JobStatus(object):
             time_updated=str(self.time_updated),
             running_time=self.running_time,
             step_nums=self.step_nums,
+            counters=self.counters,
+            complete=self.complete,
             job_flow_id=self.job_flow_id,
         )
 
@@ -606,6 +615,7 @@ class MRJobRunner(object):
         self._ran_job = True
 
     def update_status(self, new_status):
+        new_status.counters = self.counters()
         self.job_status = new_status
         if self.job_status_file_path is not None:
             with open(self.job_status_file_path, 'w') as f:
@@ -696,6 +706,9 @@ class MRJobRunner(object):
 
         if mode_has('ALL', 'LOGS', 'IF_SUCCESSFUL'):
             self._cleanup_logs()
+
+        self.job_status.complete = True
+        self.update_status(self.job_status)
 
     def counters(self):
         """Get counters associated with this run in this form:
