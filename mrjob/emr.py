@@ -629,8 +629,6 @@ class EMRJobRunner(MRJobRunner):
         # init hadoop version cache
         self._inferred_hadoop_version = None
 
-        self.job_status = None
-
     @classmethod
     def _allowed_opts(cls):
         """A list of which keyword args we can pass to __init__()"""
@@ -1357,35 +1355,30 @@ class EMRJobRunner(MRJobRunner):
 
         # find all steps belonging to us, and get their state
         step_states = []
-        running_step_name = ''
-        running_time = 0.0
 
-        job_state = job_flow.state
-        reason = getattr(job_flow, 'laststatechangereason', '')
-        status.last_state_change_reason = reason
+        status.state = job_flow.state
+        status.last_state_change_reason = getattr(
+            job_flow, 'laststatechangereason', '')
 
         steps = job_flow.steps or []
-        step_nums = []  # step numbers belonging to us. 1-indexed
+        status.step_nums = []  # step numbers belonging to us. 1-indexed
         for i, step in enumerate(steps):
             # ignore steps belonging to other jobs
             if not step.name.startswith(self._job_name):
                 continue
 
-            step_nums.append(i + 1)
+            status.step_nums.append(i + 1)
 
             step.state = step.state
             step_states.append(step.state)
             if step.state == 'RUNNING':
-                running_step_name = step.name
+                status.running_step_name = step.name
 
             if (hasattr(step, 'startdatetime') and
                 hasattr(step, 'enddatetime')):
                 start_time = iso8601_to_timestamp(step.startdatetime)
                 end_time = iso8601_to_timestamp(step.enddatetime)
-                running_time += end_time - start_time
-
-        status.step_nums = step_nums
-        status.running_time = running_time
+                status.running_time += end_time - start_time
 
         if not step_states:
             raise AssertionError("Can't find our steps in the job flow!")
@@ -1398,23 +1391,27 @@ class EMRJobRunner(MRJobRunner):
             return status
 
         # if any step fails, give up
-        if any(state in ('FAILED', 'CANCELLED') for state in step_states):
+        if any(state == 'FAILED' for state in step_states):
             status.in_progress = False
             status.success = False
-            status.state = 'FAILED' # not true, could be cancelled
+            status.state = 'FAILED'
+            return status
+
+        if any(state == 'CANCELLED' for state in step_states):
+            status.in_progress = False
+            status.success = False
+            status.state = 'CANCELLED'
             return status
 
         # (the other step states are PENDING and RUNNING)
 
         # keep track of how long we've been waiting
-        running_time = time.time() - self._emr_job_start
+        status.running_time = time.time() - self._emr_job_start
 
         # otherwise, we can print a status message
-        if running_step_name:
-            status.status_strings.append(
-                    'Job launched %.1fs ago, status %s: %s (%s)' %
-                     (running_time, job_state, reason, running_step_name)
-            )
+        status.generate_status_message()
+
+        if status.running_step_name:
             if self._show_tracker_progress:
                 try:
                     tracker_handle = urllib2.urlopen(self._tracker_url)
@@ -1424,12 +1421,11 @@ class EMRJobRunner(MRJobRunner):
                     map_complete, reduce_complete = [float(complete)
                         for complete in JOB_TRACKER_RE.findall(
                             tracker_page)[:2]]
-                    status.status_strings.append(
-                            ' map %3.0f%% reduce %3.0f%%' %
-                            (map_complete, reduce_complete)
-                    )
+                    status.status_string += ' map %3.0f%% reduce %3.0f%%' % (
+                        map_complete, reduce_complete)
                 except:
-                    log.error('Unable to load progress from job tracker')
+                    status.error_string = ('Unable to load progress from job'
+                                           ' tracker')
                     # turn off progress for rest of job
                     self._show_tracker_progress = False
             # once a step is running, it's safe to set up the ssh tunnel to
@@ -1437,20 +1433,6 @@ class EMRJobRunner(MRJobRunner):
             job_host = getattr(job_flow, 'masterpublicdnsname', None)
             if job_host and self._opts['ssh_tunnel_to_job_tracker']:
                 self.setup_ssh_tunnel_to_job_tracker(job_host)
-
-        # other states include STARTING and SHUTTING_DOWN
-        elif reason:
-            status.status_strings.append(
-                'Job launched %.1fs ago, status %s: %s' %
-                (running_time, job_state, reason)
-            )
-        else:
-            status.status_strings.append(
-                'Job launched %.1fs ago, status %s' %
-                (running_time, job_state,)
-            )
-
-        self.update_status(status)
 
         return status
 
@@ -1471,26 +1453,44 @@ class EMRJobRunner(MRJobRunner):
 
             self._set_s3_job_log_uri(job_flow)
 
-            self.job_status = self.get_job_status(job_flow)
-            for status_string in self.job_status.status_strings:
-                log.info(status_string)
+            self.update_status(self.get_job_status(job_flow))
+
+            if self.job_status.status_string:
+                log.info(self.job_status.status_string)
+
+            if self.job_status.error_string:
+                log.error(self.job_status.error_string)
 
             if self.job_status.in_progress == False:
                 break
 
-        our_step_numbers = self.job_status.step_nums
-
         if self.job_status.success:
-            log.info('Job completed.')
-            log.info('Running time was %.1fs (not counting time spent waiting'
-                     ' for the EC2 instances)' % self.job_status.running_time)
-            self._fetch_counters(our_step_numbers)
-            self.print_counters(range(1, len(our_step_numbers) + 1))
+            self.job_status.error_message = ''
+
+            self.job_status.status_message = (
+                'Job completed. Running time was %.1fs (not counting time'
+                ' spent waiting for the EC2 instances)' % (
+                self.job_status.running_time))
+
+            log.info(self.job_status.status_message)
+
+            self._fetch_counters(self.job_status.step_nums)
+            self.print_counters(
+                range(1, len(self.job_status.step_nums) + 1))
         else:
-            msg = 'Job failed with status %s: %s' % (self.job_status.state, self.job_status.last_state_change_reason)
+            self.job_status.status_message = ''
+
+            msg = 'Job failed with status %s: %s' % (
+                self.job_status.state,
+                self.job_status.last_state_change_reason)
+
             log.error(msg)
+
             if self._s3_job_log_uri:
-                log.info('Logs are in %s' % self._s3_job_log_uri)
+                log_msg = 'Logs are in %s' % self._s3_job_log_uri
+                log.info(log_msg)
+                self.job_status.status_message = log_msg
+
             # look for a Python traceback
             cause = self._find_probable_cause_of_failure(our_step_numbers)
             if cause:
@@ -1508,6 +1508,10 @@ class EMRJobRunner(MRJobRunner):
 
                 # add cause_msg to exception message
                 msg += '\n' + '\n'.join(cause_msg) + '\n'
+
+            self.job_status.error_message = msg
+
+            self.update_status(self.job_status)
 
             raise Exception(msg)
 

@@ -90,12 +90,18 @@ class JobStatus(object):
         #: Step numbers in the job flow relevant to this job
         self.step_nums = []
 
-        #: Status strings generated during the most recent status update
-        self.status_strings = []
+        #: Name of the currently active step (blank for startup/shutdown)
+        self.running_step_name = ''
 
-        #: Time spent running the job, not including time spent spinning up
+        #: Status string generated during the most recent status update
+        self.status_string = ''
+
+        #: Error string generated during the most recent status update
+        self.error_string = ''
+
+        #: Seconds spent running the job, not including time spent spinning up
         #: instances
-        self.running_time = datetime.timedelta(0)
+        self.running_time = 0.0
 
         #: Reason for the last state change. More specific purpose than the
         #: status strings.
@@ -105,16 +111,28 @@ class JobStatus(object):
         #: CANCELLED, PENDING, WAITING, RUNNING.
         self.state = ''
 
-    def clear_status_strings(self):
-        self.status_strings = []
+    def generate_status_message(self):
+        """Add a status message based on job status attributes"""
+        if self.running_step_name:
+            status_fmt = 'Job launched %.1fs ago, status %s: %s (%s)'
+            self.status_string = status_fmt % (self.running_time, self.state,
+                                               self.last_state_change_reason,
+                                               self.running_step_name)
 
-    def add_status_string(self, line):
-        self.status_strings.append(line)
-        log.info(line)
+        # other states include STARTING and SHUTTING_DOWN
+        elif self.last_state_change_reason:
+            self.status_string = 'Job launched %.1fs ago, status %s: %s' % (
+                self.running_time, self.state,
+                self.last_state_change_reason)
+        else:
+            self.status_string = 'Job launched %.1fs ago, status %s' % (
+                self.running_time, self.state)
+
 
     def as_dict(self):
-        attrs = ('in_progress', 'success', 'status_strings',
-                 'last_state_change_reason', 'state', 'time_updated')
+        attrs = ('in_progress', 'success', 'status_string', 'error_string',
+                 'last_state_change_reason', 'state', 'time_updated',
+                 'running_time', 'step_nums')
         return dict((a, getattr(self, a)) for a in attrs)
 
     def __setattr__(self, attribute, value):
