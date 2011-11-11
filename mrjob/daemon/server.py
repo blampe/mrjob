@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from imp import load_source
 import json
 from multiprocessing import Process, Queue
 import optparse
@@ -34,9 +35,12 @@ app = Flask(__name__)
 
 server = None
 client_put, client_get = None, None
+wd = None
+processes = set()
 
 
 def queue_iter(queue):
+    """Yield queue values until None is encountered"""
     while True:
         x = queue.get()
         if x is None:
@@ -45,11 +49,42 @@ def queue_iter(queue):
             yield x
 
 
+def import_from_dotted_path(path):
+    """For string 'x.y.z', return module z"""
+    items = path.split('.')
+
+    mod_path = '.'.join(items[:-1])
+    mod = __import__(mod_path, globals(), locals(), [])
+    for sub_item in items[1:]:
+        try:
+            mod = getattr(mod, sub_item)
+        except AttributeError:
+            raise AttributeError("Module %r has no attribute %r" % (mod, name))
+    return mod
+
+
+def import_from_system_path(path, classname):
+    mod = load_source('module.name', path)
+    try:
+        return getattr(mod, classname)
+    except AttributeError:
+        raise AttributeError("Module %r has no attribute %r" % (mod, classname))
+
+
 def server_func(server_get, server_put):
+    """Accept commands on server_get and send responses on server_put."""
+
     processes = set()
 
     def cmd_run_job_from_module(path, args):
-        process, info_queue = run_job(path, args)
+        process, info_queue = run_job(import_from_dotted_path(path), args, wd)
+        processes.add(process)
+
+        job_name = info_queue.get()
+        server_put.put(job_name)
+
+    def cmd_run_job_from_system_path(path, args):
+        process, info_queue = run_job(import_from_system_path(path), args, wd)
         processes.add(process)
 
         job_name = info_queue.get()
@@ -61,6 +96,7 @@ def server_func(server_get, server_put):
 
     commands = {
         'run_job_from_module': cmd_run_job_from_module,
+        'run_job_from_system_path': cmd_run_job_from_system_path,
         'list_jobs': cmd_list_jobs,
     }
 
@@ -77,7 +113,7 @@ def server_func(server_get, server_put):
         process.join()
 
 
-## web requests
+## URL handlers
 
 
 def json_response(data):
@@ -92,13 +128,19 @@ def index():
 @app.route('/jobs', methods=['GET', 'POST'])
 def jobs():
     if request.method == 'POST':
-        client_put.put({
-            'command': 'run_job_from_module',
-            'args': json.loads(request.form['args']),
-            'path': request.form['path'],
-        })
+        #client_put.put({
+        #    'command': 'run_job_from_module',
+        #    'args': json.loads(request.form['args']),
+        #    'path': request.form['path'],
+        #})
 
-        job_name = client_get.get()
+        args = json.loads(request.form['args'])
+        path = request.form['path']
+
+        process, info_queue = run_job(import_from_dotted_path(path), args, wd)
+        processes.add(process)
+
+        job_name = info_queue.get()
 
         data = {
             'status': 'OK',
@@ -116,15 +158,19 @@ def jobs():
         return json_response(data)
 
 
+# todo: run_job_from_system_path
+
+
 ## Starting the process
 
 
 def make_parser():
     parser = optparse.OptionParser()
-    parser.add_option('-c', '--conf-path', dest='conf_path', default=None,
-                      help="Path to alternate mrjob.conf file to read from")
-    parser.add_option('--debug', dest='debug', default=False, action='store_true',
-                      help="Turn on debugging")
+
+    parser.add_option(
+        '-c', '--conf-path', dest='conf_path', default=None,
+        help="Path to alternate mrjob.conf file to read from")
+
     parser.add_option(
         '--daemon-host', dest='daemon_host', default=None,
         help="Host to listen on.")
@@ -132,14 +178,24 @@ def make_parser():
     parser.add_option(
         '--daemon-port', dest='daemon_port', default=None,
         help="Port number to listen on.")
-    parser.add_option('-v', '--verbose', dest='verbose', default=False,
-                      action='store_true',
-                      help="Verbose logging")
+
+    parser.add_option(
+        '--daemon-working-directory', dest='daemon_working_directory',
+        default=None,
+        help="Directory in which to store job state and output.")
+
+    parser.add_option(
+        '--debug', dest='debug', default=False, action='store_true',
+        help="Turn on debugging")
+
+    parser.add_option(
+        '-v', '--verbose', dest='verbose', default=False, action='store_true',
+        help="Verbose logging")
     return parser
 
 
 def main():
-    global manager, server, client_put, client_get
+    global manager, server, client_put, client_get, wd
 
     parser = make_parser()
     options, args = parser.parse_args()
@@ -159,9 +215,16 @@ def main():
     log_to_stream(name='mrjob', debug=options.verbose)
     runner = LocalMRJobRunner(**runner_kwargs)
 
+    wd = runner._opts['daemon_working_directory']
+
     app.run(host=runner._opts['daemon_host'],
             port=runner._opts['daemon_port'],
             debug=options.debug)
+
+    client_put.put(None)
+
+    for process in processes:
+        process.join()
 
     server.join()
 

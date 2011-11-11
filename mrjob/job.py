@@ -969,6 +969,11 @@ class MRJob(object):
             help="Port number to communicate with daemon on.")
 
         self.runner_opt_group.add_option(
+            '--daemon-working-directory', dest='daemon_working_directory',
+            default=None,
+            help="Directory in which the daemon stores job state and output.")
+
+        self.runner_opt_group.add_option(
             '--file', dest='upload_files', action='append',
             default=[],
             help=('Copy file to the working directory of this script. You can'
