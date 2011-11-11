@@ -6,6 +6,7 @@ import tempfile
 import shutil
 
 from mrjob.emr import EMRJobRunner
+from mrjob.emr import LogFetchException
 from mrjob.daemon.api import MRJobDaemonAPI
 from mrjob.daemon.api import MRJobAPIException
 
@@ -129,7 +130,7 @@ class Shell(cmd.Cmd):
     def onecmd(self, line):
         try:
             cmd.Cmd.onecmd(self, line)
-        except (EvaluationError, MRJobAPIException), e:
+        except (EvaluationError, MRJobAPIException, LogFetchException), e:
             self._write_line('***Error: ' + unicode(e))
         except EmrResponseError, e:
             self._write_line('***Error: ' + e.error_message)
@@ -173,9 +174,11 @@ class Shell(cmd.Cmd):
             > !ps -ef
         """
         self._ensure_runner_set()
-        tmp_dir = tempfile.mkdtemp(prefix='mrboss')
-        mrboss.run_on_all_nodes(self.runner, tmp_dir, arg_string)
-        shutil.rmtree(tmp_dir)
+        tmp_dir = tempfile.mkdtemp(prefix='mrboss-')
+        self._write_line('Running \'%s\' on all nodes...' % arg_string)
+        mrboss.run_on_all_nodes(self.runner, tmp_dir, arg_string.split())
+        self._write_line('Output saved to %s.' % tmp_dir)
+#        shutil.rmtree(tmp_dir)
 
     def do_status(self, job_name):
         if not job_name:
@@ -192,6 +195,9 @@ class Shell(cmd.Cmd):
         self._ensure_runner_set()
 
     def do_EOF(self, arg_string):
+        self.do_quit(arg_string)
+
+    def do_quit(self, arg_string):
         quit(0)
 
     def _write_line(self, string):
@@ -239,5 +245,10 @@ if __name__ == '__main__':
     option_parser.add_option('--job-flow-id', dest='job_flow_id', default=0)
     options, _ = option_parser.parse_args()
 
-    Shell(job_flow_id=options.job_flow_id).cmdloop()
+    shell = Shell(job_flow_id=options.job_flow_id)
+
+    try:
+        shell.cmdloop()
+    except KeyboardInterrupt:
+        shell.do_quit('')
 
