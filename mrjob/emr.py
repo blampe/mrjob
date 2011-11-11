@@ -1358,7 +1358,7 @@ class EMRJobRunner(MRJobRunner):
         # find all steps belonging to us, and get their state
         step_states = []
         running_step_name = ''
-        total_step_time = 0.0
+        running_time = 0.0
 
         job_state = job_flow.state
         reason = getattr(job_flow, 'laststatechangereason', '')
@@ -1382,10 +1382,10 @@ class EMRJobRunner(MRJobRunner):
                 hasattr(step, 'enddatetime')):
                 start_time = iso8601_to_timestamp(step.startdatetime)
                 end_time = iso8601_to_timestamp(step.enddatetime)
-                total_step_time += end_time - start_time
+                running_time += end_time - start_time
 
         status.step_nums = step_nums
-        status.total_step_time = total_step_time
+        status.running_time = running_time
 
         if not step_states:
             raise AssertionError("Can't find our steps in the job flow!")
@@ -1483,7 +1483,7 @@ class EMRJobRunner(MRJobRunner):
         if self.job_status.success:
             log.info('Job completed.')
             log.info('Running time was %.1fs (not counting time spent waiting'
-                     ' for the EC2 instances)' % self.job_status.total_step_time)
+                     ' for the EC2 instances)' % self.job_status.running_time)
             self._fetch_counters(our_step_numbers)
             self.print_counters(range(1, len(our_step_numbers) + 1))
         else:

@@ -81,13 +81,28 @@ class JobStatus(object):
     """Just a simple wrapper around some job status data at the moment."""
     def __init__(self, in_progress=True, success=None):
 
+        #: True if the job is still running
         self.in_progress = in_progress
+
+        #: If not in progress, was it successful?
         self.success = success
 
+        #: Step numbers in the job flow relevant to this job
         self.step_nums = []
+
+        #: Status strings generated during the most recent status update
         self.status_strings = []
-        self.total_step_time = datetime.timedelta(0)
+
+        #: Time spent running the job, not including time spent spinning up
+        #: instances
+        self.running_time = datetime.timedelta(0)
+
+        #: Reason for the last state change. More specific purpose than the
+        #: status strings.
         self.last_state_change_reason = ''
+
+        #: Current state. One of STARTING, STOPPING, COMPLETED, FAILED,
+        #: CANCELLED, PENDING, WAITING, RUNNING.
         self.state = ''
 
     def clear_status_strings(self):
