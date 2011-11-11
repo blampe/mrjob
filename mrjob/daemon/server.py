@@ -151,7 +151,7 @@ def get_stderr(job_name):
         'status': 'OK',
     }
     if not os.path.exists(path):
-        data['status'] = 'null'
+        data['job_status'] = 'null'
     else:
         with open(path, 'r') as f:
             data['job_status'] = f.read()

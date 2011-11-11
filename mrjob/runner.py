@@ -125,8 +125,8 @@ class JobStatus(object):
         self.last_state_change_reason = ''
 
         #: Current state. One of STARTING, STOPPING, COMPLETED, FAILED,
-        #: CANCELLED, PENDING, WAITING, RUNNING.
-        self.state = ''
+        #: CANCELLED, PENDING, WAITING, RUNNING, UNKNOWN
+        self.state = 'UNKNOWN'
 
     def generate_status_message(self):
         """Add a status message based on job status attributes"""
@@ -150,7 +150,17 @@ class JobStatus(object):
         attrs = ('in_progress', 'success', 'status_string', 'error_string',
                  'last_state_change_reason', 'state', 'time_updated',
                  'running_time', 'step_nums')
-        return dict((a, getattr(self, a)) for a in attrs)
+        return dict(
+            in_progress=self.in_progress,
+            success=self.success,
+            status_string=self.status_string,
+            error_string=self.error_string,
+            last_state_change_reason=self.last_state_change_reason,
+            state=self.state,
+            time_updated=str(self.time_updated),
+            running_time=self.running_time,
+            step_nums=self.step_nums
+        )
 
     def __setattr__(self, attribute, value):
         object.__setattr__(self, attribute, value)
@@ -160,13 +170,14 @@ class JobStatus(object):
 class JobStatusLoggingHandler(logging.Handler):
 
     def __init__(self, runner, level):
-        logging.Handler.__init__(self, level=level)
+        logging.Handler.__init__(self)
         self._runner = runner
+        self._level = level
 
     def emit(self, record):
-        if self.getLevel() == 'INFO':
+        if self._level == 'INFO':
             self._runner.job_status.status_string = record.getMessage()
-        elif self.getLevel() == 'ERROR':
+        elif self._level == 'ERROR':
             self._runner.job_status.error_string = record.getMessage()
 
         self._runner.update_status(self._runner.job_status)
@@ -500,7 +511,7 @@ class MRJobRunner(object):
 
         # last known status of the job. Set with MRJobRunner.update_status() so
         # it will be written to the appropriate file.
-        self.job_status = None
+        self.job_status = JobStatus()
         self.job_status_file_path = None
 
     @classmethod

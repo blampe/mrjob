@@ -95,12 +95,12 @@ if __name__ == '__main__':
     api = MRJobDaemonAPI('http://127.0.0.1:5000')
 
     job_name = api.run_job('mrjob.examples.mr_word_freq_count.MRWordFreqCount',
-                           ['-r', 'emr', '--emr-job-flow-id', 'j-76UKOCP851Z4',
+                           ['-r', 'emr', '--emr-job-flow-id', 'j-3LD0PP3C9B0S9',
                             '/nail/home/sjohnson/pg/mrjob/README.rst'])
 
     status = dict(in_progress=True)
 
-    while status['in_progress']:
+    while status is None or status['in_progress']:
         time.sleep(1)
         status = api.get_status(job_name)
         print status
