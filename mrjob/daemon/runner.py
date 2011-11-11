@@ -12,7 +12,7 @@ def wd_path(wd, job_name, *more_path):
     return full_path
 
 
-def run_job(job_cls, args, wd):
+def run_mrjob(job_cls, args, wd):
     job = job_cls(args=args)
 
     info_queue = Queue()
@@ -29,6 +29,8 @@ def job_runner(job, info_queue, wd):
         with open(wd_path(wd, runner._job_name, 'stderr'), 'w') as log_file:
             with temp_log_to_stream(name='mrjob', stream=log_file):
                 info_queue.put(runner._job_name)
+                runner.job_status_file_path = wd_path(
+                    wd, runner._job_name, 'status')
                 runner.run()
 
                 with open(wd_path(wd, runner._job_name, 'stdout'), 'w') \

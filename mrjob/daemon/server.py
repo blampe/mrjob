@@ -24,7 +24,7 @@ except ImportError:
     print >> sys.stderr, "mrjobd requires Flask."
     sys.exit(1)
 
-from mrjob.daemon.runner import run_job, wd_path
+from mrjob.daemon.runner import run_mrjob, wd_path
 from mrjob.local import LocalMRJobRunner
 from mrjob.util import log_to_stream
 
@@ -84,10 +84,10 @@ def run_job():
         items = path.split(' ')
         path = ' '.join(items[:-1])
         classname = items[-1]
-        process, info_queue = run_job(
+        process, info_queue = run_mrjob(
             import_from_system_path(path, classname), args, wd)
     else:
-        process, info_queue = run_job(
+        process, info_queue = run_mrjob(
             import_from_dotted_path(path), args, wd)
     processes.add(process)
 
@@ -131,6 +131,23 @@ def get_stderr(job_name):
     else:
         with open(path, 'r') as f:
             data['stderr'] = f.read()
+    return json_response(data)
+
+
+@app.route('/<job_name>/status', methods=['GET'])
+def get_stderr(job_name):
+    if not os.path.exists(wd_path(wd, job_name)):
+        abort(404)
+    path = wd_path(wd, job_name, 'status')
+
+    data = {
+        'status': 'OK',
+    }
+    if not os.path.exists(path):
+        data['status'] = 'null'
+    else:
+        with open(path, 'r') as f:
+            data['job_status'] = f.read()
     return json_response(data)
 
 

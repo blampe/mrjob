@@ -20,6 +20,7 @@ import datetime
 import getpass
 import glob
 import hashlib
+import json
 import logging
 import os
 import random
@@ -74,6 +75,29 @@ CLEANUP_DEFAULT = 'IF_SUCCESSFUL'
 
 
 _STEP_RE = re.compile(r'^M?C?R?$')
+
+
+class JobStatus(object):
+    """Just a simple wrapper around some job status data at the moment."""
+    def __init__(self, in_progress=True, success=None):
+
+        self.in_progress = in_progress
+        self.success = success
+
+        self.step_nums = []
+        self.status_strings = []
+        self.total_step_time = datetime.timedelta(0)
+        self.last_state_change_reason = ''
+        self.state = ''
+
+    def as_dict(self):
+        attrs = ('in_progress', 'success', 'status_strings',
+                 'last_state_change_reason', 'state', 'time_updated')
+        return dict((a, getattr(self, a)) for a in attrs)
+
+    def __setattr__(self, attribute, value):
+        object.__setattr__(self, attribute, value)
+        object.__setattr__(self, 'time_updated', datetime.datetime.now())
 
 
 class MRJobRunner(object):
@@ -402,6 +426,11 @@ class MRJobRunner(object):
         # info about our steps. this is basically a cache for self._get_steps()
         self._steps = None
 
+        # last known status of the job. Set with MRJobRunner.update_status() so
+        # it will be written to the appropriate file.
+        self.job_status = None
+        self.job_status_file_path = None
+
     @classmethod
     def _allowed_opts(cls):
         """A list of the options that can be passed to :py:meth:`__init__`
@@ -491,6 +520,12 @@ class MRJobRunner(object):
         assert not self._ran_job
         self._run()
         self._ran_job = True
+
+    def update_status(self, new_status):
+        self.job_status = new_status
+        if self.job_status_file_path is not None:
+            with open(self.job_status_file_path, 'w') as f:
+                f.write(json.dumps(self.job_status.as_dict()))
 
     def stream_output(self):
         """Stream raw lines from the job's output. You can parse these

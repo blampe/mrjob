@@ -14,6 +14,7 @@
 
 import json
 import os
+import time
 
 import requests
 
@@ -55,6 +56,9 @@ class MRJobDaemonAPI(APIBase):
 
     def run_job(self, path, args):
         if '/' in path:
+            # this actually does not work because of the class name being
+            # included in the path.
+            # fixme
             return self.post('/run_job',
                              data={
                                  'args': json.dumps(args),
@@ -73,19 +77,22 @@ class MRJobDaemonAPI(APIBase):
     def get_stderr(self, job_name):
             return self.get('/%s/stderr' % job_name)['stderr']
 
+    def get_status(self, job_name):
+            return json.loads(self.get('/%s/status' % job_name)['job_status'])
+
 
 if __name__ == '__main__':
     api = MRJobDaemonAPI('http://127.0.0.1:5000')
 
-    print 'stdout:'
-    print api.get_stdout('mr_word_freq_count.sjohnson.20111111.012938.397848')
+    job_name = api.run_job('mrjob.examples.mr_word_freq_count.MRWordFreqCount',
+                           ['-r', 'local',
+                            '/nail/home/sjohnson/pg/mrjob/README.rst'])
 
-    print 'stderr:'
-    print api.get_stderr('mr_word_freq_count.sjohnson.20111111.012938.397848')
+    status = dict(in_progress=True)
 
-    print 'bad stdout:'
-    print api.get_stdout('doesnotexist')
+    while status['in_progress']:
+        time.sleep(1)
+        status = api.get_status(job_name)
+        print status
 
-    #print api.run_job('mrjob.examples.mr_word_freq_count.MRWordFreqCount',
-    #                  ['-r', 'local',
-    #                   '/nail/home/sjohnson/pg/mrjob/README.rst'])
+    print api.get_stdout(job_name)
