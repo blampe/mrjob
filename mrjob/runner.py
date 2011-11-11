@@ -15,6 +15,7 @@ from __future__ import with_statement
 
 """Base class for all runners."""
 
+from contextlib import contextmanager
 import copy
 import datetime
 import getpass
@@ -75,6 +76,22 @@ CLEANUP_DEFAULT = 'IF_SUCCESSFUL'
 
 
 _STEP_RE = re.compile(r'^M?C?R?$')
+
+
+@contextmanager
+def log_to_job_status(log_scope, runner):
+    mrjob_logger = logging.getLogger(log_scope)
+    temp_handlers = [
+        JobStatusLoggingHandler(runner, 'INFO'),
+        JobStatusLoggingHandler(runner, 'ERROR'),
+    ]
+    for h in temp_handlers:
+        mrjob_logger.addHandler(h)
+
+    yield
+
+    for h in temp_handlers:
+        mrjob_logger.removeHandler(h)
 
 
 class JobStatus(object):
@@ -138,6 +155,21 @@ class JobStatus(object):
     def __setattr__(self, attribute, value):
         object.__setattr__(self, attribute, value)
         object.__setattr__(self, 'time_updated', datetime.datetime.now())
+
+
+class JobStatusLoggingHandler(logging.Handler):
+
+    def __init__(self, runner, level):
+        logging.Handler.__init__(self, level=level)
+        self._runner = runner
+
+    def emit(self, record):
+        if self.getLevel() == 'INFO':
+            self._runner.job_status.status_string = record.getMessage()
+        elif self.getLevel() == 'ERROR':
+            self._runner.job_status.error_string = record.getMessage()
+
+        self._runner.update_status(self._runner.job_status)
 
 
 class MRJobRunner(object):
@@ -574,7 +606,9 @@ class MRJobRunner(object):
         assert self._ran_job
 
         output_dir = self.get_output_dir()
-        log.info('Streaming final output from %s' % output_dir)
+
+        with log_to_job_status('mrjob.emr', self):
+            log.info('Streaming final output from %s' % output_dir)
 
         return self.cat(self.path_join(output_dir, 'part-*'))
 
@@ -589,7 +623,10 @@ class MRJobRunner(object):
         This won't remove output_dir if it's outside of our scratch dir.
         """
         if self._local_tmp_dir:
-            log.info('removing tmp directory %s' % self._local_tmp_dir)
+
+            with log_to_job_status('mrjob.emr', self):
+                log.info('removing tmp directory %s' % self._local_tmp_dir)
+
             try:
                 shutil.rmtree(self._local_tmp_dir)
             except OSError, e:
@@ -996,7 +1033,10 @@ class MRJobRunner(object):
         cleaned up by self.cleanup()"""
         if not self._local_tmp_dir:
             path = os.path.join(self._opts['base_tmp_dir'], self._job_name)
-            log.info('creating tmp directory %s' % path)
+
+            with log_to_job_status('mrjob.emr', self):
+                log.info('creating tmp directory %s' % path)
+
             os.makedirs(path)
             self._local_tmp_dir = path
 
@@ -1165,7 +1205,9 @@ class MRJobRunner(object):
             return
 
         path = os.path.join(self._get_local_tmp_dir(), dest)
-        log.info('writing wrapper script to %s' % path)
+
+        with log_to_job_status('mrjob.emr', self):
+            log.info('writing wrapper script to %s' % path)
 
         contents = self._wrapper_script_content()
         for line in StringIO(contents):

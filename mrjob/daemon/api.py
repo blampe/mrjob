@@ -35,9 +35,14 @@ class APIBase(object):
             print r.content
         if not r.content:
             raise MRJobAPIException('No content at %s%s' % (self.base, cmd))
-        data = json.loads(r.content)
-        if data['status'] != 'OK':
-            raise MRJobAPIException(data['error'])
+
+        try:
+            data = json.loads(r.content)
+            if data['status'] != 'OK':
+                raise MRJobAPIException(data['error'])
+        except:
+            raise MRJobAPIException(r.content)
+
         return data
 
     def post(self, cmd, data):
@@ -46,10 +51,14 @@ class APIBase(object):
             print r.content
         if not r.content:
             raise MRJobAPIException('No content at %s%s' % (self.base, cmd))
-        data = json.loads(r.content)
 
-        if data['status'] != 'OK':
-            raise MRJobAPIException(data['error'])
+        try:
+            data = json.loads(r.content)
+            if data['status'] != 'OK':
+                raise MRJobAPIException(data['error'])
+        except:
+            raise MRJobAPIException(r.content)
+
         return data
 
 
@@ -86,7 +95,7 @@ if __name__ == '__main__':
     api = MRJobDaemonAPI('http://127.0.0.1:5000')
 
     job_name = api.run_job('mrjob.examples.mr_word_freq_count.MRWordFreqCount',
-                           ['-r', 'local',
+                           ['-r', 'emr', '--emr-job-flow-id', 'j-76UKOCP851Z4',
                             '/nail/home/sjohnson/pg/mrjob/README.rst'])
 
     status = dict(in_progress=True)

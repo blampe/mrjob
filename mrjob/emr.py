@@ -68,6 +68,7 @@ from mrjob.parse import is_s3_uri
 from mrjob.parse import parse_s3_uri
 from mrjob.retry import RetryWrapper
 from mrjob.runner import JobStatus
+from mrjob.runner import log_to_job_status
 from mrjob.runner import MRJobRunner
 from mrjob.runner import GLOB_RE
 from mrjob.ssh import ssh_cat
@@ -869,7 +870,9 @@ class EMRJobRunner(MRJobRunner):
         # 00000-actual_name.ext
         if local_input_paths:
             s3_input_dir = self._s3_tmp_uri + 'input/'
-            log.info('Uploading input to %s' % s3_input_dir)
+
+            with log_to_job_status('mrjob.emr', self):
+                log.info('Uploading input to %s' % s3_input_dir)
 
             s3_conn = self.make_s3_conn()
             for file_num, path in enumerate(local_input_paths):
@@ -907,7 +910,9 @@ class EMRJobRunner(MRJobRunner):
         self._pick_s3_uris_for_files()
 
         s3_files_dir = self._s3_tmp_uri + 'files/'
-        log.info('Copying non-input files into %s' % s3_files_dir)
+
+        with log_to_job_status('mrjob.emr', self):
+            log.info('Copying non-input files into %s' % s3_files_dir)
 
         s3_conn = self.make_s3_conn()
         for file_dict in self._files:
@@ -950,7 +955,8 @@ class EMRJobRunner(MRJobRunner):
                             ' restarting...' % self._ssh_proc.returncode)
                 self._ssh_proc = None
 
-        log.info('Opening ssh tunnel to Hadoop job tracker')
+        with log_to_job_status('mrjob.emr', self):
+            log.info('Opening ssh tunnel to Hadoop job tracker')
 
         # if ssh detects that a host key has changed, it will silently not
         # open the tunnel, so make a fake empty known_hosts file and use that.
@@ -1033,8 +1039,9 @@ class EMRJobRunner(MRJobRunner):
         if self._ssh_proc:
             self._ssh_proc.poll()
             if self._ssh_proc.returncode is None:
-                log.info('Killing our SSH tunnel (pid %d)' %
-                         self._ssh_proc.pid)
+                with log_to_job_status('mrjob.emr', self):
+                    log.info('Killing our SSH tunnel (pid %d)' %
+                             self._ssh_proc.pid)
                 try:
                     os.kill(self._ssh_proc.pid, signal.SIGKILL)
                     self._ssh_proc = None
@@ -1057,7 +1064,9 @@ class EMRJobRunner(MRJobRunner):
         # delete all the files we created
         if self._s3_tmp_uri:
             try:
-                log.info('Removing all files in %s' % self._s3_tmp_uri)
+                with log_to_job_status('mrjob.emr', self):
+                    log.info('Removing all files in %s' % self._s3_tmp_uri)
+
                 self.rm(self._s3_tmp_uri)
                 self._s3_tmp_uri = None
             except Exception, e:
@@ -1342,7 +1351,10 @@ class EMRJobRunner(MRJobRunner):
                 persistent=False, steps=steps)
         else:
             emr_conn = self.make_emr_conn()
-            log.info('Adding our job to job flow %s' % self._emr_job_flow_id)
+
+            with log_to_job_status('mrjob.emr', self):
+                log.info('Adding our job to job flow %s' % self._emr_job_flow_id)
+
             log.debug('Calling add_jobflow_steps(%r, %r)' % (
                 self._emr_job_flow_id, steps))
             emr_conn.add_jobflow_steps(self._emr_job_flow_id, steps)
