@@ -90,6 +90,13 @@ class JobStatus(object):
         self.last_state_change_reason = ''
         self.state = ''
 
+    def clear_status_strings(self):
+        self.status_strings = []
+
+    def add_status_string(self, line):
+        self.status_strings.append(line)
+        log.info(line)
+
     def as_dict(self):
         attrs = ('in_progress', 'success', 'status_strings',
                  'last_state_change_reason', 'state', 'time_updated')
