@@ -14,19 +14,17 @@
 
 from imp import load_source
 import json
-from multiprocessing import Process, Queue
 import optparse
 import os
 import sys
 
 try:
-    from flask import abort, Flask, redirect, request, Response, url_for
+    from flask import abort, Flask, request, Response
 except ImportError:
     print >> sys.stderr, "mrjobd requires Flask."
     sys.exit(1)
 
 from mrjob.daemon.runner import run_job, wd_path
-from mrjob.daemon.util import runner_to_json
 from mrjob.local import LocalMRJobRunner
 from mrjob.util import log_to_stream
 
@@ -58,7 +56,7 @@ def import_from_dotted_path(path):
         try:
             mod = getattr(mod, sub_item)
         except AttributeError:
-            raise AttributeError("Module %r has no attribute %r" % (mod, name))
+            raise AttributeError("Module %r has no attribute %r" % (mod, sub_item))
     return mod
 
 
