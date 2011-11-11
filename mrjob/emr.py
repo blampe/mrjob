@@ -1351,7 +1351,7 @@ class EMRJobRunner(MRJobRunner):
         self._emr_job_start = time.time()
 
     def get_job_status(self, job_flow):
-        status = JobStatus(job_flow_id=job_flow.id)
+        status = JobStatus(job_flow_id=self._emr_job_flow_id)
 
         # find all steps belonging to us, and get their state
         step_states = []

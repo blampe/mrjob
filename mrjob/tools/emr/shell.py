@@ -58,7 +58,7 @@ class Shell(cmd.Cmd):
 
     # todo: option
 
-    def __init__(self, job_flow_id=None, prompt='> ', *args, **kwargs):
+    def __init__(self, job_flow_id=0, prompt='> ', *args, **kwargs):
         cmd.Cmd.__init__(self, *args, **kwargs)
         self.prompt = prompt
         self.runner = None
@@ -136,11 +136,14 @@ class Shell(cmd.Cmd):
 
     def do_set_job(self, job_flow_id):
         self.job_flow_id = job_flow_id
+        self._ensure_runner_set()
 
     def do_start(self, args):
         """Start an MR job.
 
             > start mrjob.examples.mr_word_freq_count.MRWordFreqCount -r local /nail/home/bryce/pg/mrjob/README.rst
+
+            TODO: Tab completion would be great!
         """
         job_runner, job_args = self._get_command_and_args(args, require_args=True)
 
@@ -149,6 +152,9 @@ class Shell(cmd.Cmd):
         self._write_line('Submitting job...')
         self.job_names.append(self.api.run_job(job_runner, job_args.split()))
         self._write_line('Submitted job \'%s\'' % self.job_names[-1])
+
+#    def do_complete(self, text):
+#       pass
 
     def do_jobs(self, arg_string):
         """Show currently tracked jobs."""
@@ -175,7 +181,7 @@ class Shell(cmd.Cmd):
         if not job_name:
             job_name = self.job_names[-1]
 
-        self._write_line('Fetching status for \'%s\'' % self.job_names[-1])
+        self._write_line('Fetching status for \'%s\'' % job_name)
         self._ensure_runner_set()
 
         status = self.api.get_status(job_name)
@@ -187,9 +193,6 @@ class Shell(cmd.Cmd):
 
     def do_EOF(self, arg_string):
         quit(0)
-
-    def do_poo(self, arg_string):
-        print arg_string
 
     def _write_line(self, string):
         self.stdout.write(unicode(string) + os.linesep)
@@ -203,13 +206,14 @@ class Shell(cmd.Cmd):
         return None
 
     def _ensure_job_flow_set(self):
-        if self.job_flow_id is None:
-            raise NeedMoreInputError('job_flow_id')
+        pass
+        #if self.job_flow_id is None: # not using this
+         #   raise NeedMoreInputError('job_flow_id=%s' % self.job_flow_id)
 
     def _ensure_runner_set(self):
         self._ensure_job_flow_set()
-
-        self.runner = EMRJobRunner(emr_job_flow_id=self.job_flow_id)
+        if not self.runner or (self.runner and self.runner._emr_job_flow_id != self.job_flow_id):
+            self.runner = EMRJobRunner(emr_job_flow_id=self.job_flow_id)
 
         self.api = MRJobDaemonAPI('http://' +
             self.runner._opts['daemon_host'] + ':' + self.runner._opts['daemon_port']
@@ -232,7 +236,7 @@ class Shell(cmd.Cmd):
 
 if __name__ == '__main__':
     option_parser = optparse.OptionParser()
-    option_parser.add_option('--job-flow-id', dest='job_flow_id', default=None)
+    option_parser.add_option('--job-flow-id', dest='job_flow_id', default=0)
     options, _ = option_parser.parse_args()
 
     Shell(job_flow_id=options.job_flow_id).cmdloop()
