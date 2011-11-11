@@ -20,6 +20,7 @@ import datetime
 import getpass
 import glob
 import hashlib
+import json
 import logging
 import os
 import random
@@ -90,8 +91,8 @@ class JobStatus(object):
         self.state = ''
 
     def as_dict(self):
-        attrs = ('in_progress', 'success', 'step_nums', 'status_strings',
-                 'total_step_time', 'last_state_change_reason', 'state')
+        attrs = ('in_progress', 'success', 'status_strings',
+                 'last_state_change_reason', 'state')
         return dict((a, getattr(self, a)) for a in attrs)
 
     def __setattr__(self, attribute, value):
