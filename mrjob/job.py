@@ -961,6 +961,19 @@ class MRJob(object):
             'multiple times.')
 
         self.runner_opt_group.add_option(
+            '--daemon-host', dest='daemon_host', default=None,
+            help="Host to communicate with daemon on.")
+
+        self.runner_opt_group.add_option(
+            '--daemon-port', dest='daemon_port', default=None,
+            help="Port number to communicate with daemon on.")
+
+        self.runner_opt_group.add_option(
+            '--daemon-working-directory', dest='daemon_working_directory',
+            default=None,
+            help="Directory in which the daemon stores job state and output.")
+
+        self.runner_opt_group.add_option(
             '--file', dest='upload_files', action='append',
             default=[],
             help=('Copy file to the working directory of this script. You can'
@@ -1474,6 +1487,8 @@ class MRJob(object):
             'cleanup_on_failure': self.options.cleanup_on_failure,
             'cmdenv': self.options.cmdenv,
             'conf_path': self.options.conf_path,
+            'daemon_host': self.options.daemon_host,
+            'daemon_port': self.options.daemon_port,
             'extra_args': self.generate_passthrough_arguments(),
             'file_upload_args': self.generate_file_upload_args(),
             'hadoop_extra_args': self.options.hadoop_extra_args,

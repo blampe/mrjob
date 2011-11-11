@@ -123,6 +123,46 @@ def log_to_stream(name=None, stream=None, format=None, level=None,
     logger.addHandler(handler)
 
 
+@contextlib.contextmanager
+def temp_log_to_stream(name=None, stream=None, format=None, level=None,
+                       debug=False):
+    """Set up logging.
+
+    :type name: str
+    :param name: name of the logger, or ``None`` for the root logger
+    :type stderr: file object
+    :param stderr:  stream to log to (default is ``sys.stderr``)
+    :type format: str
+    :param format: log message format (default is '%(message)s')
+    :param level: log level to use
+    :type debug: bool
+    :param debug: quick way of setting the log level: if true, use
+                  ``logging.DEBUG``, otherwise use ``logging.INFO``
+    """
+    if level is None:
+        level = logging.DEBUG if debug else logging.INFO
+
+    if format is None:
+        format = '%(message)s'
+
+    if stream is None:
+        stream = sys.stderr
+
+    handler = logging.StreamHandler(stream)
+    handler.setLevel(level)
+    handler.setFormatter(logging.Formatter(format))
+
+    logger = logging.getLogger(name)
+    old_level = logger.level
+    logger.setLevel(level)
+    logger.addHandler(handler)
+
+    yield
+
+    logger.removeHandler(handler)
+    logger.setLevel(old_level)
+
+
 def _capture_args(opt, rargs, func):
     """Return a list containing *opt* plus the items of *rargs* consumed
     by *func*

@@ -1,40 +1,37 @@
 from multiprocessing import Process, Queue
+import os
+
+from mrjob.util import temp_log_to_stream
 
 
-def import_from_dotted_path(path):
-    items = path.split('.')
-
-    mod_path = '.'.join(items[:-1])
-    mod = __import__(mod_path, globals(), locals(), [])
-    for sub_item in items[1:-1]:
-        try:
-            mod = getattr(mod, sub_item)
-        except AttributeError:
-            raise AttributeError("Module %r has no attribute %r" % (mod, name))
-    try:
-        mod = getattr(mod, items[-1])
-    except AttributeError:
-        raise AttributeError("Module %r has no attribute %r" % (mod, items[-1]))
-    return mod
+def wd_path(wd, job_name, *more_path):
+    full_path = os.path.join(wd, job_name, *more_path)
+    base_path = os.path.split(full_path)[0]
+    if not os.path.exists(base_path):
+        os.makedirs(base_path)
+    return full_path
 
 
-def run_job(module_path, args):
-    job_cls = import_from_dotted_path(module_path)
+def run_job(job_cls, args, wd):
     job = job_cls(args=args)
 
-    queue = Queue()
-    process = Process(target=job_runner, args=(job, queue))
+    info_queue = Queue()
+    process = Process(target=job_runner,
+                      args=(job, info_queue, wd))
 
     process.start()
 
-    return process, queue
+    return process, info_queue
 
 
-def job_runner(job, queue):
+def job_runner(job, info_queue, wd):
     with job.make_runner() as runner:
-        queue.put(runner._job_name)
-        runner.run()
+        with open(wd_path(wd, runner._job_name, 'stderr'), 'w') as log_file:
+            with temp_log_to_stream(name='mrjob', stream=log_file):
+                info_queue.put(runner._job_name)
+                runner.run()
 
-        for line in runner.stream_output():
-            queue.put(line)
-    queue.put(None)
+                with open(wd_path(wd, runner._job_name, 'stdout'), 'w') \
+                    as out_file:
+                    for line in runner.stream_output():
+                        out_file.write(line)

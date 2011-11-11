@@ -12,8 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from imp import load_source
 import json
 from multiprocessing import Process, Queue
+import optparse
 import sys
 
 try:
@@ -24,16 +26,19 @@ except ImportError:
 
 from mrjob.daemon.runner import run_job
 from mrjob.daemon.util import runner_to_json
+from mrjob.local import LocalMRJobRunner
+from mrjob.util import log_to_stream
 
 
 app = Flask(__name__)
 
 
-server = None
-client_put, client_get = None, None
+wd = None
+processes = set()
 
 
 def queue_iter(queue):
+    """Yield queue values until None is encountered"""
     while True:
         x = queue.get()
         if x is None:
@@ -42,31 +47,29 @@ def queue_iter(queue):
             yield x
 
 
-def server_func(server_get, server_put):
-    processes = {}
-    queues = {}
-    states = {}
+def import_from_dotted_path(path):
+    """For string 'x.y.z', return module z"""
+    items = path.split('.')
 
-    for cmd in queue_iter(server_get):
-        if cmd is None:
-            break
-        if cmd['command'] == 'run_job':
-            process, queue = run_job(cmd['path'], cmd['args'])
-
-            job_name = queue.get()
-
-            processes[job_name] = process
-            queues[job_name] = queue
-            server_put.put(job_name)
-
-            for line in queue_iter(queue):
-                sys.stdout.write(line)
-
-            del queues[job_name]
-            del processes[job_name]
+    mod_path = '.'.join(items[:-1])
+    mod = __import__(mod_path, globals(), locals(), [])
+    for sub_item in items[1:]:
+        try:
+            mod = getattr(mod, sub_item)
+        except AttributeError:
+            raise AttributeError("Module %r has no attribute %r" % (mod, name))
+    return mod
 
 
-## web requests
+def import_from_system_path(path, classname):
+    mod = load_source('module.name', path)
+    try:
+        return getattr(mod, classname)
+    except AttributeError:
+        raise AttributeError("Module %r has no attribute %r" % (mod, classname))
+
+
+## URL handlers
 
 
 def json_response(data):
@@ -78,16 +81,24 @@ def index():
     return redirect(url_for('jobs'))
 
 
-@app.route('/jobs', methods=['GET', 'POST'])
+@app.route('/run_job', methods=['GET', 'POST'])
 def jobs():
     if request.method == 'POST':
-        client_put.put({
-            'command': 'run_job',
-            'args': json.loads(request.form['args']),
-            'path': request.form['path'],
-        })
+        args = json.loads(request.form['args'])
+        path = request.form['path']
 
-        job_name = client_get.get()
+        if '/' in path:
+            items = path.split(' ')
+            path = ' '.join(items[:-1])
+            classname = items[-1]
+            process, info_queue = run_job(
+                import_from_system_path(path, classname), args, wd)
+        else:
+            process, info_queue = run_job(
+                import_from_dotted_path(path), args, wd)
+        processes.add(process)
+
+        job_name = info_queue.get()
 
         data = {
             'status': 'OK',
@@ -95,9 +106,11 @@ def jobs():
         }
         return json_response(data)
     else:
+        client_put.put({
+            'command': 'list_jobs',
+        })
         data = {
-            'jobs': dict((name, runner_to_json(runner))
-                         for name, runner in runners.iteritems()),
+            'jobs': client_get.get(),
             'status': 'OK',
         }
         return json_response(data)
@@ -106,17 +119,60 @@ def jobs():
 ## Starting the process
 
 
+def make_parser():
+    parser = optparse.OptionParser()
+
+    parser.add_option(
+        '-c', '--conf-path', dest='conf_path', default=None,
+        help="Path to alternate mrjob.conf file to read from")
+
+    parser.add_option(
+        '--daemon-host', dest='daemon_host', default=None,
+        help="Host to listen on.")
+
+    parser.add_option(
+        '--daemon-port', dest='daemon_port', default=None,
+        help="Port number to listen on.")
+
+    parser.add_option(
+        '--daemon-working-directory', dest='daemon_working_directory',
+        default=None,
+        help="Directory in which to store job state and output.")
+
+    parser.add_option(
+        '--debug', dest='debug', default=False, action='store_true',
+        help="Turn on debugging")
+
+    parser.add_option(
+        '-v', '--verbose', dest='verbose', default=False, action='store_true',
+        help="Verbose logging")
+    return parser
+
+
 def main():
-    global server, client_put, client_get
-    client_put = Queue()
-    client_get = Queue()
-    server = Process(target=server_func, args=(client_put, client_get))
-    server.start()
+    global wd
 
-    app.debug = True
-    app.run()
+    parser = make_parser()
+    options, args = parser.parse_args()
+    if len(args) > 0:
+        raise optparse.OptionError('Unknown options: %s' % args)
 
-    server.join()
+    runner_kwargs = options.__dict__.copy()
+
+    del runner_kwargs['debug']
+    del runner_kwargs['verbose']
+
+    log_to_stream(name='mrjob', debug=options.verbose)
+    runner = LocalMRJobRunner(**runner_kwargs)
+
+    wd = runner._opts['daemon_working_directory']
+
+    app.run(host=runner._opts['daemon_host'],
+            port=runner._opts['daemon_port'],
+            debug=options.debug)
+
+    for process in processes:
+        process.join()
 
 
 if __name__ == '__main__':
