@@ -180,7 +180,6 @@ class Shell(cmd.Cmd):
 
         status = self.api.get_status(job_name)
 
-        import ipdb; ipdb.set_trace()
         if self.job_flow_id != status['job_flow_id']:
             self.job_flow_id = status['job_flow_id']
 

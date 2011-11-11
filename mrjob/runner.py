@@ -79,20 +79,63 @@ _STEP_RE = re.compile(r'^M?C?R?$')
 
 class JobStatus(object):
     """Just a simple wrapper around some job status data at the moment."""
-    def __init__(self, in_progress=True, success=None):
+    def __init__(self, in_progress=True, success=None, job_flow_id=None):
 
+        #: True if the job is still running
         self.in_progress = in_progress
+
+        #: If not in progress, was it successful?
         self.success = success
 
+        #: The EMR job flow id for this job
+        self.job_flow_id = job_flow_id
+
+        #: Step numbers in the job flow relevant to this job
         self.step_nums = []
-        self.status_strings = []
-        self.total_step_time = 0
+
+        #: Name of the currently active step (blank for startup/shutdown)
+        self.running_step_name = ''
+
+        #: Status string generated during the most recent status update
+        self.status_string = ''
+
+        #: Error string generated during the most recent status update
+        self.error_string = ''
+
+        #: Seconds spent running the job, not including time spent spinning up
+        #: instances
+        self.running_time = 0.0
+
+        #: Reason for the last state change. More specific purpose than the
+        #: status strings.
         self.last_state_change_reason = ''
+
+        #: Current state. One of STARTING, STOPPING, COMPLETED, FAILED,
+        #: CANCELLED, PENDING, WAITING, RUNNING.
         self.state = ''
 
+    def generate_status_message(self):
+        """Add a status message based on job status attributes"""
+        if self.running_step_name:
+            status_fmt = 'Job launched %.1fs ago, status %s: %s (%s)'
+            self.status_string = status_fmt % (self.running_time, self.state,
+                                               self.last_state_change_reason,
+                                               self.running_step_name)
+
+        # other states include STARTING and SHUTTING_DOWN
+        elif self.last_state_change_reason:
+            self.status_string = 'Job launched %.1fs ago, status %s: %s' % (
+                self.running_time, self.state,
+                self.last_state_change_reason)
+        else:
+            self.status_string = 'Job launched %.1fs ago, status %s' % (
+                self.running_time, self.state)
+
+
     def as_dict(self):
-        attrs = ('in_progress', 'success', 'status_strings',
-                 'last_state_change_reason', 'state', 'time_updated')
+        attrs = ('in_progress', 'success', 'status_string', 'error_string',
+                 'last_state_change_reason', 'state', 'time_updated',
+                 'running_time', 'step_nums', 'job_flow_id')
         return dict((a, getattr(self, a)) for a in attrs)
 
     def __setattr__(self, attribute, value):
