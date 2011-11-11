@@ -646,6 +646,8 @@ class EMRJobRunner(MRJobRunner):
         # init hadoop version cache
         self._inferred_hadoop_version = None
 
+        self.job_status = None
+
     @classmethod
     def _allowed_opts(cls):
         """A list of which keyword args we can pass to __init__()"""

@@ -27,16 +27,18 @@ def main():
 
     options, args = option_parser.parse_args()
 
-    job_flow_id = args[0]
+    emr_job_flow_id = args[0]
 
-    job_status = get_job_status(job_flow_id)
+    with EMRJobRunner(emr_job_flow_id=emr_job_flow_id) as runner:
+        job_status = get_job_status(runner)
 
     print job_status
 
-def get_job_status(emr_job_flow_id, **runner_kwargs):
+def get_job_status(runner):
+    return runner.job_status
 
-    with EMRJobRunner(emr_job_flow_id=emr_job_flow_id, **runner_kwargs) as runner:
-        return runner.job_status
+def test(job_flow_id):
+    print job_flow_id
 
 if __name__ == '__main__':
     main()
