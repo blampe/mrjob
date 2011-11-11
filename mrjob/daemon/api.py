@@ -47,6 +47,7 @@ class APIBase(object):
         if not r.content:
             raise MRJobAPIException('No content at %s%s' % (self.base, cmd))
         data = json.loads(r.content)
+
         if data['status'] != 'OK':
             raise MRJobAPIException(data['error'])
         return data
