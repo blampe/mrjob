@@ -56,6 +56,9 @@ class MRJobDaemonAPI(APIBase):
 
     def run_job(self, path, args):
         if '/' in path:
+            # this actually does not work because of the class name being
+            # included in the path.
+            # fixme
             return self.post('/run_job',
                              data={
                                  'args': json.dumps(args),
