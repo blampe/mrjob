@@ -24,12 +24,14 @@ import stat
 from subprocess import Popen
 from subprocess import PIPE
 import sys
+import time
 
 from mrjob.compat import translate_jobconf
 from mrjob.conf import combine_dicts
 from mrjob.conf import combine_local_envs
 from mrjob.parse import find_python_traceback
 from mrjob.parse import parse_mr_job_stderr
+from mrjob.runner import JobStatus
 from mrjob.runner import MRJobRunner
 from mrjob.util import cmd_line
 from mrjob.util import read_input
@@ -116,6 +118,12 @@ class LocalMRJobRunner(MRJobRunner):
     ]
 
     def _run(self):
+        status = JobStatus()
+        status.state = 'STARTING'
+        self.update_status(status)
+
+        job_start_time = time.time()
+
         if self._opts['bootstrap_mrjob']:
             self._add_python_archive(self._create_mrjob_tar_gz() + '#')
 
@@ -147,6 +155,10 @@ class LocalMRJobRunner(MRJobRunner):
                             [self._wrapper_script['name']] +
                             wrapper_args)
 
+        status.state = 'RUNNING'
+        status.in_progress = True
+        self.update_status(status)
+
         # run mapper, combiner, sort, reducer for each step
         for i, step in enumerate(self._get_steps()):
             self._counters.append({})
@@ -160,16 +172,37 @@ class LocalMRJobRunner(MRJobRunner):
                                  '--step-num=%d' % i, '--combiner'] +
                                  self._mr_job_extra_args())
 
+            status.status_strings = []
+            running_time = time.time() - job_start_time
+            status.status_strings.append('Job launched %.1fs ago, starting'
+                                         ' step %d mapper/combiner' % (
+                                             running_time, i))
+            self.update_status(status)
+
             self._invoke_step(mapper_args, 'step-%d-mapper' % i,
                               step_num=i, step_type='M',
                               num_tasks=self._map_tasks,
                               combiner_args=combiner_args)
 
             if 'R' in step:
+                status.status_strings = []
+                running_time = time.time() - job_start_time
+                status.status_strings.append('Job launched %.1fs ago, sorting'
+                                             ' step %d mapper/combiner'
+                                             ' output' % (running_time, i))
+                self.update_status(status)
+
                 # sort the output
                 self._invoke_step(['sort'], 'step-%d-mapper-sorted' % i,
                                   env={'LC_ALL': 'C'}, step_num=i,
                                   step_type='S', num_tasks=1)  # ignore locale
+
+                status.status_strings = []
+                running_time = time.time() - job_start_time
+                status.status_strings.append('Job launched %.1fs ago, starting'
+                                             'step %d reducer' % (
+                                                 running_time, i))
+                self.update_status(status)
 
                 # run the reducer
                 reducer_args = (wrapper_args + [self._script['name'],
@@ -179,11 +212,24 @@ class LocalMRJobRunner(MRJobRunner):
                                   step_num=i, step_type='R',
                                   num_tasks=self._reduce_tasks)
 
+        status.status_strings = []
+        running_time = time.time() - job_start_time
+        status.status_strings.append('Job launched %.1fs ago, moving'
+                                     'files into place' % running_time)
+        self.update_status(status)
+
         # move final output to output directory
         for i, outfile in enumerate(self._prev_outfiles):
             final_outfile = os.path.join(self._output_dir, 'part-%05d' % i)
             log.info('Moving %s -> %s' % (outfile, final_outfile))
             shutil.move(outfile, final_outfile)
+
+        status.status_strings = []
+        status.state = 'COMPLETED'
+        status.in_progress = False
+        status.success = True
+        status.status_strings.append('Job complete')
+        self.update_status(status)
 
     def _process_jobconf_args(self, jobconf):
         if jobconf:

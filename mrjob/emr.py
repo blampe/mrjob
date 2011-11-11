@@ -67,6 +67,7 @@ from mrjob.logparsers import scan_logs_in_order
 from mrjob.parse import is_s3_uri
 from mrjob.parse import parse_s3_uri
 from mrjob.retry import RetryWrapper
+from mrjob.runner import JobStatus
 from mrjob.runner import MRJobRunner
 from mrjob.runner import GLOB_RE
 from mrjob.ssh import ssh_cat
@@ -164,24 +165,6 @@ EC2_INSTANCE_TYPE_TO_MEMORY = {
     'cc1.4xlarge': 23,
     'cg1.4xlarge': 22,
 }
-
-
-class JobStatus(object):
-    """Just a simple wrapper around some job status data at the moment."""
-    def __init__(self, in_progress=True, success=None):
-
-        self.in_progress = in_progress
-        self.success = success
-
-        self.step_nums = []
-        self.status_strings = []
-        self.total_step_time = datetime.timedelta(0)
-        self.last_state_change_reason = ''
-        self.state = ''
-
-    def __setattr__(self, attribute, value):
-        object.__setattr__(self, attribute, value)
-        object.__setattr__(self, 'time_updated', datetime.datetime.now())
 
 
 def est_time_to_hour(job_flow):
@@ -1458,14 +1441,16 @@ class EMRJobRunner(MRJobRunner):
         # other states include STARTING and SHUTTING_DOWN
         elif reason:
             status.status_strings.append(
-                    'Job launched %.1fs ago, status %s: %s' %
-                    (running_time, job_state, reason)
+                'Job launched %.1fs ago, status %s: %s' %
+                (running_time, job_state, reason)
             )
         else:
             status.status_strings.append(
-                    'Job launched %.1fs ago, status %s' %
-                    (running_time, job_state,)
+                'Job launched %.1fs ago, status %s' %
+                (running_time, job_state,)
             )
+
+        self.update_status(status)
 
         return status
 
