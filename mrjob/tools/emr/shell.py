@@ -4,6 +4,8 @@ import inspect
 import optparse
 
 from mrjob.emr import EMRJobRunner
+from mrjob.daemon.api import MRJobDaemonAPI
+from mrjob.daemon.api import MRJobAPIException
 
 from mrjob.tools.emr import fetch_logs
 from mrjob.tools.emr import get_status
@@ -33,10 +35,7 @@ module_methods = {
     }
 
 class EvaluationError(Exception):
-    error_prefix = '***'
-
-    def __str__(self):
-        return self.error_prefix + super(EvaluationError, self).__repr__()
+    pass
 
 class NeedMoreInputError(EvaluationError):
     pass
@@ -64,8 +63,10 @@ class Shell(cmd.Cmd):
     def __init__(self, job_flow_id=None, prompt='> ', *args, **kwargs):
         cmd.Cmd.__init__(self, *args, **kwargs)
         self.prompt = prompt
-        self.job_flow_id = job_flow_id
         self.runner = None
+        self.job_names = []
+
+        self.do_set_job(job_flow_id)
 
         # add `do_script_name` methods to ourselves
         for module_name in module_methods:
@@ -130,14 +131,34 @@ class Shell(cmd.Cmd):
     def onecmd(self, line):
         try:
             cmd.Cmd.onecmd(self, line)
-        except EvaluationError, e:
-            self._write_line(unicode(e))
+        except (EvaluationError, MRJobAPIException), e:
+            self._write_line('***Error: ' + unicode(e))
 
     def do_set_job(self, job_flow_id):
         self.job_flow_id = job_flow_id
 
-    def do_print(self, arg_string):
-        self._write_line(self.job_flow_id)
+    def do_start(self, args):
+        split_args = args.split(' ', 1)
+        if len(split_args) < 2:
+            raise NeedMoreInputError(args)
+
+        job_runner, job_args = split_args[0], split_args[1]
+
+        self._ensure_runner_set()
+
+        self._write_line('Submitting job...')
+        self.job_names.append(self.api.run_job(job_runner, job_args.split()))
+        self._write_line('Submitted job \'%s\'' % self.job_names[-1])
+
+    def do_jobs(self, arg_string):
+        self._write_line('Current job flow id is: %s' % self.job_flow_id)
+
+        if not self.job_names:
+            return
+
+        self._write_line('Submitted jobs are:')
+        for job_name in self.job_names:
+            self._write_line('\t' + job_name)
 
     def do_EOF(self, arg_string):
         quit(0)
@@ -163,6 +184,10 @@ class Shell(cmd.Cmd):
     def _ensure_runner_set(self):
         self._ensure_job_flow_set()
         self.runner = EMRJobRunner(emr_job_flow_id=self.job_flow_id)
+        self.api = MRJobDaemonAPI('http://' +
+            self.runner._opts['daemon_host'] + ':' + self.runner._opts['daemon_port']
+        )
+        self.api.debug = True
 
 
 if __name__ == '__main__':
