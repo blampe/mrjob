@@ -22,19 +22,19 @@ def run_job(module_path, args):
     job_cls = import_from_dotted_path(module_path)
     job = job_cls(args=args)
 
-    queue = Queue()
-    process = Process(target=job_runner, args=(job, queue))
+    info_queue = Queue()
+    process = Process(target=job_runner,
+                      args=(job, info_queue))
 
     process.start()
 
-    return process, queue
+    return process, info_queue
 
 
-def job_runner(job, queue):
+def job_runner(job, info_queue):
     with job.make_runner() as runner:
-        queue.put(runner._job_name)
+        info_queue.put(runner._job_name)
         runner.run()
 
         for line in runner.stream_output():
-            queue.put(line)
-    queue.put(None)
+            stdout_queue.put(line)
