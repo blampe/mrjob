@@ -86,7 +86,7 @@ class JobStatus(object):
 
         self.step_nums = []
         self.status_strings = []
-        self.total_step_time = datetime.timedelta(0)
+        self.total_step_time = 0
         self.last_state_change_reason = ''
         self.state = ''
 
@@ -97,7 +97,7 @@ class JobStatus(object):
 
     def __setattr__(self, attribute, value):
         object.__setattr__(self, attribute, value)
-        object.__setattr__(self, 'time_updated', datetime.datetime.now())
+        object.__setattr__(self, 'time_updated', str(datetime.datetime.now()))
 
 
 class MRJobRunner(object):

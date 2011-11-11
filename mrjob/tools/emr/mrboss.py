@@ -84,7 +84,6 @@ def main():
     with EMRJobRunner(emr_job_flow_id=job_flow_id, **runner_kwargs) as runner:
         run_on_all_nodes(runner, output_dir, cmd_args)
 
-
 def run_on_all_nodes(runner, output_dir, cmd_args, print_stderr=True):
     """Given an :py:class:`EMRJobRunner`, run the command specified by
     *cmd_args* on all nodes in the job flow and save the stdout and stderr of

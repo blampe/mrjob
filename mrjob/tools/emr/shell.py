@@ -2,6 +2,8 @@ import cmd
 import os
 import inspect
 import optparse
+import tempfile
+import shutil
 
 from mrjob.emr import EMRJobRunner
 from mrjob.daemon.api import MRJobDaemonAPI
@@ -9,10 +11,11 @@ from mrjob.daemon.api import MRJobAPIException
 
 from mrjob.tools.emr import fetch_logs
 from mrjob.tools.emr import get_status
+from mrjob.tools.emr import mrboss
 
+from boto.exception import EmrResponseError
 
 FETCH_LOGS = 'fetch_logs'
-GET_STATUS = 'get_status'
 SET_JOB = 'set_job'
 
 # could do this programatically by inspecting method argspecs
@@ -23,10 +26,6 @@ module_methods = {
             fetch_logs.cat_relevant,
             fetch_logs.list_all,
             fetch_logs.list_relevant,
-        ),
-
-        GET_STATUS: (
-            get_status.get_job_status,
         ),
 
         'test': (
@@ -53,7 +52,6 @@ class Shell(cmd.Cmd):
     # shorter command names for convenience
     aliases = dict(
             logs=FETCH_LOGS,
-            status=GET_STATUS,
             job=SET_JOB,
     )
 
@@ -133,16 +131,18 @@ class Shell(cmd.Cmd):
             cmd.Cmd.onecmd(self, line)
         except (EvaluationError, MRJobAPIException), e:
             self._write_line('***Error: ' + unicode(e))
+        except EmrResponseError, e:
+            self._write_line('***Error: ' + e.error_message)
 
     def do_set_job(self, job_flow_id):
         self.job_flow_id = job_flow_id
 
     def do_start(self, args):
-        split_args = args.split(' ', 1)
-        if len(split_args) < 2:
-            raise NeedMoreInputError(args)
+        """Start an MR job.
 
-        job_runner, job_args = split_args[0], split_args[1]
+            > start mrjob.examples.mr_word_freq_count.MRWordFreqCount -r local /nail/home/bryce/pg/mrjob/README.rst
+        """
+        job_runner, job_args = self._get_command_and_args(args, require_args=True)
 
         self._ensure_runner_set()
 
@@ -151,6 +151,7 @@ class Shell(cmd.Cmd):
         self._write_line('Submitted job \'%s\'' % self.job_names[-1])
 
     def do_jobs(self, arg_string):
+        """Show currently tracked jobs."""
         self._write_line('Current job flow id is: %s' % self.job_flow_id)
 
         if not self.job_names:
@@ -159,6 +160,31 @@ class Shell(cmd.Cmd):
         self._write_line('Submitted jobs are:')
         for job_name in self.job_names:
             self._write_line('\t' + job_name)
+
+    def do_shell(self, arg_string):
+        """Run a shell command on all nodes.
+
+            > !ps -ef
+        """
+        self._ensure_runner_set()
+        tmp_dir = tempfile.mkdtemp(prefix='mrboss')
+        mrboss.run_on_all_nodes(self.runner, tmp_dir, arg_string)
+        shutil.rmtree(tmp_dir)
+
+    def do_status(self, job_name):
+        if not job_name:
+            job_name = self.job_names[-1]
+
+        self._write_line('Fetching status for \'%s\'' % self.job_names[-1])
+        self._ensure_runner_set()
+
+        status = self.api.get_status(job_name)
+
+        import ipdb; ipdb.set_trace()
+        if self.job_flow_id != status['job_flow_id']:
+            self.job_flow_id = status['job_flow_id']
+
+        self._ensure_runner_set()
 
     def do_EOF(self, arg_string):
         quit(0)
@@ -183,12 +209,27 @@ class Shell(cmd.Cmd):
 
     def _ensure_runner_set(self):
         self._ensure_job_flow_set()
+
         self.runner = EMRJobRunner(emr_job_flow_id=self.job_flow_id)
+
         self.api = MRJobDaemonAPI('http://' +
             self.runner._opts['daemon_host'] + ':' + self.runner._opts['daemon_port']
         )
         self.api.debug = True
 
+    def _get_command_and_args(self, arg_string, require_args=False):
+        split_args = arg_string.split(' ', 1)
+        if require_args and len(split_args) < 2:
+            raise NeedMoreInputError(arg_string)
+
+        command_name = split_args[0]
+
+        if len(split_args) > 1:
+            command_args = split_args[1]
+        else:
+            command_args = ''
+
+        return command_name, command_args
 
 if __name__ == '__main__':
     option_parser = optparse.OptionParser()
