@@ -28,9 +28,14 @@ def job_runner(job, info_queue, wd):
     with job.make_runner() as runner:
         with open(wd_path(wd, runner._job_name, 'stderr'), 'w') as log_file:
             with temp_log_to_stream(name='mrjob', stream=log_file):
+                # tell the caller what the job is called so they can maybe
+                # pass it back as an HTTP response
                 info_queue.put(runner._job_name)
+
                 runner.job_status_file_path = wd_path(
                     wd, runner._job_name, 'status')
+                runner.update_status(runner.job_status)
+
                 runner.run()
 
                 with open(wd_path(wd, runner._job_name, 'stdout'), 'w') \

@@ -75,6 +75,13 @@ def json_response(data):
     return Response(json.dumps(data), mimetype='text/json')
 
 
+@app.route('/list_jobs', methods=['GET'])
+def list_jobs():
+    data = {
+        'status': 'OK'
+    }
+
+
 @app.route('/run_job', methods=['POST'])
 def run_job():
     args = json.loads(request.form['args'])
@@ -144,7 +151,7 @@ def get_stderr(job_name):
         'status': 'OK',
     }
     if not os.path.exists(path):
-        data['status'] = 'null'
+        data['job_status'] = 'null'
     else:
         with open(path, 'r') as f:
             data['job_status'] = f.read()

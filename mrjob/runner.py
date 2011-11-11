@@ -15,6 +15,7 @@ from __future__ import with_statement
 
 """Base class for all runners."""
 
+from contextlib import contextmanager
 import copy
 import datetime
 import getpass
@@ -77,6 +78,22 @@ CLEANUP_DEFAULT = 'IF_SUCCESSFUL'
 _STEP_RE = re.compile(r'^M?C?R?$')
 
 
+@contextmanager
+def log_to_job_status(log_scope, runner):
+    mrjob_logger = logging.getLogger(log_scope)
+    temp_handlers = [
+        JobStatusLoggingHandler(runner, 'INFO'),
+        JobStatusLoggingHandler(runner, 'ERROR'),
+    ]
+    for h in temp_handlers:
+        mrjob_logger.addHandler(h)
+
+    yield
+
+    for h in temp_handlers:
+        mrjob_logger.removeHandler(h)
+
+
 class JobStatus(object):
     """Just a simple wrapper around some job status data at the moment."""
     def __init__(self, in_progress=True, success=None, job_flow_id=None):
@@ -111,8 +128,8 @@ class JobStatus(object):
         self.last_state_change_reason = ''
 
         #: Current state. One of STARTING, STOPPING, COMPLETED, FAILED,
-        #: CANCELLED, PENDING, WAITING, RUNNING.
-        self.state = ''
+        #: CANCELLED, PENDING, WAITING, RUNNING, UNKNOWN
+        self.state = 'UNKNOWN'
 
     def generate_status_message(self):
         """Add a status message based on job status attributes"""
@@ -133,14 +150,38 @@ class JobStatus(object):
 
 
     def as_dict(self):
-        attrs = ('in_progress', 'success', 'status_string', 'error_string',
-                 'last_state_change_reason', 'state', 'time_updated',
-                 'running_time', 'step_nums', 'job_flow_id')
-        return dict((a, getattr(self, a)) for a in attrs)
+        return dict(
+            in_progress=self.in_progress,
+            success=self.success,
+            status_string=self.status_string,
+            error_string=self.error_string,
+            last_state_change_reason=self.last_state_change_reason,
+            state=self.state,
+            time_updated=str(self.time_updated),
+            running_time=self.running_time,
+            step_nums=self.step_nums,
+            job_flow_id=self.job_flow_id,
+        )
 
     def __setattr__(self, attribute, value):
         object.__setattr__(self, attribute, value)
         object.__setattr__(self, 'time_updated', str(datetime.datetime.now()))
+
+
+class JobStatusLoggingHandler(logging.Handler):
+
+    def __init__(self, runner, level):
+        logging.Handler.__init__(self)
+        self._runner = runner
+        self._level = level
+
+    def emit(self, record):
+        if self._level == 'INFO':
+            self._runner.job_status.status_string = record.getMessage()
+        elif self._level == 'ERROR':
+            self._runner.job_status.error_string = record.getMessage()
+
+        self._runner.update_status(self._runner.job_status)
 
 
 class MRJobRunner(object):
@@ -471,7 +512,7 @@ class MRJobRunner(object):
 
         # last known status of the job. Set with MRJobRunner.update_status() so
         # it will be written to the appropriate file.
-        self.job_status = None
+        self.job_status = JobStatus()
         self.job_status_file_path = None
 
     @classmethod
@@ -577,7 +618,9 @@ class MRJobRunner(object):
         assert self._ran_job
 
         output_dir = self.get_output_dir()
-        log.info('Streaming final output from %s' % output_dir)
+
+        with log_to_job_status('mrjob.emr', self):
+            log.info('Streaming final output from %s' % output_dir)
 
         return self.cat(self.path_join(output_dir, 'part-*'))
 
@@ -592,7 +635,10 @@ class MRJobRunner(object):
         This won't remove output_dir if it's outside of our scratch dir.
         """
         if self._local_tmp_dir:
-            log.info('removing tmp directory %s' % self._local_tmp_dir)
+
+            with log_to_job_status('mrjob.emr', self):
+                log.info('removing tmp directory %s' % self._local_tmp_dir)
+
             try:
                 shutil.rmtree(self._local_tmp_dir)
             except OSError, e:
@@ -999,7 +1045,10 @@ class MRJobRunner(object):
         cleaned up by self.cleanup()"""
         if not self._local_tmp_dir:
             path = os.path.join(self._opts['base_tmp_dir'], self._job_name)
-            log.info('creating tmp directory %s' % path)
+
+            with log_to_job_status('mrjob.emr', self):
+                log.info('creating tmp directory %s' % path)
+
             os.makedirs(path)
             self._local_tmp_dir = path
 
@@ -1168,7 +1217,9 @@ class MRJobRunner(object):
             return
 
         path = os.path.join(self._get_local_tmp_dir(), dest)
-        log.info('writing wrapper script to %s' % path)
+
+        with log_to_job_status('mrjob.emr', self):
+            log.info('writing wrapper script to %s' % path)
 
         contents = self._wrapper_script_content()
         for line in StringIO(contents):
