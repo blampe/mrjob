@@ -33,8 +33,6 @@ from mrjob.util import log_to_stream
 app = Flask(__name__)
 
 
-server = None
-client_put, client_get = None, None
 wd = None
 processes = set()
 
@@ -71,48 +69,6 @@ def import_from_system_path(path, classname):
         raise AttributeError("Module %r has no attribute %r" % (mod, classname))
 
 
-def server_func(server_get, server_put):
-    """Accept commands on server_get and send responses on server_put."""
-
-    processes = set()
-
-    def cmd_run_job_from_module(path, args):
-        process, info_queue = run_job(import_from_dotted_path(path), args, wd)
-        processes.add(process)
-
-        job_name = info_queue.get()
-        server_put.put(job_name)
-
-    def cmd_run_job_from_system_path(path, args):
-        process, info_queue = run_job(import_from_system_path(path), args, wd)
-        processes.add(process)
-
-        job_name = info_queue.get()
-        server_put.put(job_name)
-
-    def cmd_list_jobs():
-        server_put.put(list(states.values()))
-
-
-    commands = {
-        'run_job_from_module': cmd_run_job_from_module,
-        'run_job_from_system_path': cmd_run_job_from_system_path,
-        'list_jobs': cmd_list_jobs,
-    }
-
-    for cmd_dict in queue_iter(server_get):
-        if cmd_dict is None:
-            break
-
-        cmd = cmd_dict['command']
-        del cmd_dict['command']
-
-        commands[cmd](**cmd_dict)
-
-    for process in processes:
-        process.join()
-
-
 ## URL handlers
 
 
@@ -125,19 +81,21 @@ def index():
     return redirect(url_for('jobs'))
 
 
-@app.route('/jobs', methods=['GET', 'POST'])
+@app.route('/run_job', methods=['GET', 'POST'])
 def jobs():
     if request.method == 'POST':
-        #client_put.put({
-        #    'command': 'run_job_from_module',
-        #    'args': json.loads(request.form['args']),
-        #    'path': request.form['path'],
-        #})
-
         args = json.loads(request.form['args'])
         path = request.form['path']
 
-        process, info_queue = run_job(import_from_dotted_path(path), args, wd)
+        if '/' in path:
+            items = path.split(' ')
+            path = ' '.join(items[:-1])
+            classname = items[-1]
+            process, info_queue = run_job(
+                import_from_system_path(path, classname), args, wd)
+        else:
+            process, info_queue = run_job(
+                import_from_dotted_path(path), args, wd)
         processes.add(process)
 
         job_name = info_queue.get()
@@ -156,9 +114,6 @@ def jobs():
             'status': 'OK',
         }
         return json_response(data)
-
-
-# todo: run_job_from_system_path
 
 
 ## Starting the process
@@ -195,17 +150,12 @@ def make_parser():
 
 
 def main():
-    global manager, server, client_put, client_get, wd
+    global wd
 
     parser = make_parser()
     options, args = parser.parse_args()
     if len(args) > 0:
         raise optparse.OptionError('Unknown options: %s' % args)
-
-    client_put = Queue()
-    client_get = Queue()
-    server = Process(target=server_func, args=(client_put, client_get))
-    server.start()
 
     runner_kwargs = options.__dict__.copy()
 
@@ -221,12 +171,8 @@ def main():
             port=runner._opts['daemon_port'],
             debug=options.debug)
 
-    client_put.put(None)
-
     for process in processes:
         process.join()
-
-    server.join()
 
 
 if __name__ == '__main__':

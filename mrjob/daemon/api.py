@@ -52,11 +52,8 @@ class APIBase(object):
 
 class MRJobDaemonAPI(APIBase):
 
-    def jobs(self):
-        return self.get('/jobs')['jobs']
-
     def run_job(self, path, args):
-        return self.post('/jobs',
+        return self.post('/run_job',
                          data={
                              'args': json.dumps(args),
                              'path': path,
